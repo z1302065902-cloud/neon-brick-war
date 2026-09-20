@@ -191,6 +191,7 @@ export class Game {
     this.spawnWaveForOutpost(0);
     this.spawnPickupsForMap();
     this.vfx.warmUp(this.renderer, this.camera);
+    this.audio.startMusic(map);
 
     this.ready = true;
     this.advancing = false;
@@ -336,6 +337,8 @@ export class Game {
     // Unlock a mid-tier gun when boss appears
     this.loadout.unlock('grenade');
     this.loadout.unlock('rail');
+    this.audio.bossSting();
+    this.hud.flashStatus(`${boss.displayName} incoming`);
     this.hud.setBoss({ name: boss.displayName, hp: boss.hp, maxHp: boss.maxHp, phase: boss.phase });
   }
 
@@ -546,6 +549,7 @@ export class Game {
         this.hud.hitmarker();
         this.audio.hit();
       }
+      if (shot.shieldBreak) this.audio.shieldBreak();
       if (shot.explosionAt) this.audio.explosion(shot.explosionScale ?? 1);
     }
 
@@ -621,7 +625,7 @@ export class Game {
         this.buffs.haste = 6;
         break;
       case 'ammo':
-        this.loadout.refillAmmo(30);
+        this.loadout.refillAmmo(0.4);
         this.loadout.unlock('arc');
         break;
       case 'emp':
@@ -721,6 +725,7 @@ export class Game {
       onPhaseChange: () => {
         this.hud.flashStatus(`${this.boss?.displayName ?? 'Boss'} — RAGE PHASE`);
         this.hud.hurt();
+        this.audio.rageSting();
       },
     };
   }

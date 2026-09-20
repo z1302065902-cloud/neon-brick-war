@@ -63,12 +63,31 @@ export class WeaponLoadout {
     return true;
   }
 
-  refillAmmo(amount = 999): void {
+  /**
+   * Restores a fraction of every weapon's capacity.
+   *
+   * This used to add a flat number of rounds to each gun, which inverted the design: a crate
+   * topped the *scarce* weapons up completely (plasma holds 6, grenade 10) while barely
+   * denting the roomy ones (scatter holds 48). Scaling by capacity keeps plasma and grenades
+   * genuinely scarce and makes the crate worth the same to every weapon.
+   */
+  refillAmmo(fraction = 0.4): void {
     for (const w of WEAPONS) {
       if (w.ammoMax === 'inf') continue;
       const cur = this.ammo.get(w.id) ?? 0;
-      this.ammo.set(w.id, Math.min(w.ammoMax, cur + Math.ceil(amount / 3)));
+      const gain = Math.max(1, Math.round(w.ammoMax * fraction));
+      this.ammo.set(w.id, Math.min(w.ammoMax, cur + gain));
     }
+  }
+
+  /** Remaining rounds per weapon, for tests and tuning. */
+  get ammoSnapshot(): Record<string, number> {
+    const out: Record<string, number> = {};
+    for (const w of WEAPONS) {
+      if (w.ammoMax === 'inf') continue;
+      out[w.id] = this.ammo.get(w.id) ?? 0;
+    }
+    return out;
   }
 
   update(delta: number): void {

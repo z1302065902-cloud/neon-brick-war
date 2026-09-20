@@ -12,6 +12,8 @@ export type FireResult = {
   explosionColor?: string;
   /** Set when the shot landed on a boss weak spot — drives distinct feedback. */
   weakHit?: boolean;
+  /** Set when this shot is what broke a shield. */
+  shieldBreak?: boolean;
 };
 
 export class CombatSystem {
@@ -21,6 +23,8 @@ export class CombatSystem {
   private readonly tmp2 = new THREE.Vector3();
   private readonly tmp3 = new THREE.Vector3();
   private readonly tmp4 = new THREE.Vector3();
+  private readonly tmp5 = new THREE.Vector3();
+  private readonly tmp6 = new THREE.Vector3();
 
   constructor(
     private readonly scene: THREE.Scene,
@@ -162,6 +166,7 @@ export class CombatSystem {
     // wraps around a person.
     const bodies = this.agentColliderSet(targets);
     const hitAgents: BrickAgent[] = [];
+    let shieldBreak = false;
     for (const t of targets) {
       if (!t.alive || t === shooter) continue;
       const p = t.body.translation();
@@ -170,7 +175,13 @@ export class CombatSystem {
       if (d > radius) continue;
       // A blast does not travel through walls — no damaging enemies behind cover.
       if (this.lineBlocked(world, impact, centre, shooter, undefined, bodies)) continue;
-      this.applyDamage(t, weapon.damage * damageMul * (1 - d / radius * 0.4), weapon.pierceShield, impact);
+      const broke = this.applyDamage(
+        t,
+        weapon.damage * damageMul * (1 - d / radius * 0.4),
+        weapon.pierceShield,
+        impact,
+      );
+      if (broke) shieldBreak = true;
       hitAgents.push(t);
     }
     this.vfx.beam(from, impact, weapon.muzzleColor, 0.16, 0.5, true);
@@ -180,6 +191,7 @@ export class CombatSystem {
       explosionAt: impact,
       explosionScale: radius * 0.85,
       explosionColor: weapon.muzzleColor,
+      shieldBreak,
     };
   }
 
@@ -199,15 +211,20 @@ export class CombatSystem {
         const p = t.body.translation();
         const to = this.tmp.set(p.x - from.x, p.y - from.y, p.z - from.z);
         const proj = to.dot(dir);
-        const lat = to.clone().addScaledVector(dir, -proj).length();
+        // Measured to the capsule axis, same as hitscan, so a bolt aimed at the chest or
+        // head still counts instead of arcing past above the collider centre.
+        const lat = this.rayToBodyDistance(from, dir, t, proj);
         return { t, proj, lat, dist: to.length() };
       })
-      .filter((x) => x.proj > 0 && x.proj < weapon.range && x.lat < 2.2)
+      // Chain tolerance also scales off the body, slightly more generously than hitscan
+      // since lightning is meant to arc onto nearby targets.
+      .filter((x) => x.proj > 0 && x.proj < weapon.range && x.lat < x.t.radius + 0.6)
       .sort((a, b) => a.dist - b.dist);
 
     // Lightning arcs over bodies — only walls break the chain.
     const bodies = this.agentColliderSet(targets);
     const hitAgents: BrickAgent[] = [];
+    let shieldBreak = false;
     let prev = from.clone();
     for (let i = 0; i < ordered.length && hitAgents.length < chain; i++) {
       const agent = ordered[i]!.t;
@@ -216,13 +233,19 @@ export class CombatSystem {
       // The arc must not jump through walls between links.
       if (this.lineBlocked(world, prev, hit, shooter, undefined, bodies)) continue;
       const step = hitAgents.length;
-      this.applyDamage(agent, weapon.damage * damageMul * (1 - step * 0.15), weapon.pierceShield, prev);
+      const broke = this.applyDamage(
+        agent,
+        weapon.damage * damageMul * (1 - step * 0.15),
+        weapon.pierceShield,
+        prev,
+      );
+      if (broke) shieldBreak = true;
       hitAgents.push(agent);
       this.vfx.beam(prev, hit, weapon.muzzleColor, 0.16, 0.42, false);
       this.vfx.spawn(hit, weapon.muzzleColor, 0.85, 0.28);
       prev = hit;
     }
-    return { hitAgents };
+    return { hitAgents, shieldBreak };
   }
 
   private fireHitscan(
@@ -245,8 +268,11 @@ export class CombatSystem {
       const to = this.tmp2.set(p.x - from.x, p.y - from.y, p.z - from.z);
       const proj = to.dot(dir);
       if (proj < 0 || proj > weapon.range) continue;
-      const closest = this.tmp3.copy(from).addScaledVector(dir, proj);
-      if (closest.distanceTo(this.tmp4.set(p.x, p.y, p.z)) > 1.8) continue;
+      // Tolerance is sized off the body rather than a flat constant. The old 1.8m was 6.4x
+      // a grunt's 0.28m capsule, so shots that visibly missed still connected.
+      // The 0.45m of slack covers the gap between the collider (1.46 tall) and the visible
+      // figure (1.90 tall) so aiming at the head reads as a hit.
+      if (this.rayToBodyDistance(from, dir, t, proj) > t.radius + 0.45) continue;
       candidates.push({ t, proj });
     }
     candidates.sort((a, b) => a.proj - b.proj);
@@ -269,6 +295,7 @@ export class CombatSystem {
 
     const hitAgents: BrickAgent[] = [];
     let weakHit = false;
+    let shieldBreak = false;
     if (best) {
       let amount = weapon.damage * damageMul;
       // A boss weak spot only counts when the ray actually passes through it.
@@ -277,7 +304,8 @@ export class CombatSystem {
         amount *= wp.multiplier;
         weakHit = true;
       }
-      this.applyDamage(best, amount, weapon.pierceShield || pierce, from);
+      const broke = this.applyDamage(best, amount, weapon.pierceShield || pierce, from);
+      if (broke) shieldBreak = true;
       hitAgents.push(best);
       const p = best.body.translation();
       const hit = new THREE.Vector3(p.x, p.y, p.z);
@@ -289,7 +317,7 @@ export class CombatSystem {
       this.spawnTracer(from, end, weapon.muzzleColor, pierce);
       this.vfx.spawn(end, weapon.muzzleColor, 0.55, 0.18);
     }
-    return { hitAgents, weakHit };
+    return { hitAgents, weakHit, shieldBreak };
   }
 
   private spawnTracer(from: THREE.Vector3, to: THREE.Vector3, color: string, fat = false): void {
@@ -306,6 +334,31 @@ export class CombatSystem {
     return set;
   }
 
+  /**
+   * Shortest distance from the ray to the target's capsule axis.
+   *
+   * Measuring to the capsule *centre* instead would make head and chest shots miss: the
+   * collider stops at y≈1.46 while the figure is 1.9 tall, so a shot aimed at the head
+   * passes ~0.85m above the centre. Sampling the axis is what lets the tolerance stay tight
+   * without punishing good aim.
+   */
+  private rayToBodyDistance(
+    from: THREE.Vector3,
+    dir: THREE.Vector3,
+    target: BrickAgent,
+    proj: number,
+  ): number {
+    const p = target.body.translation();
+    const half = Math.max(0, target.standHeight - target.radius);
+    const closest = this.tmp5.copy(from).addScaledVector(dir, proj);
+    let best = Infinity;
+    for (let i = 0; i <= 4; i++) {
+      const y = p.y - half + (half * 2 * i) / 4;
+      best = Math.min(best, closest.distanceTo(this.tmp6.set(p.x, y, p.z)));
+    }
+    return best;
+  }
+
   /** Shortest distance from `point` to the ray `from + t*dir`. */
   private rayDistanceTo(from: THREE.Vector3, dir: THREE.Vector3, point: THREE.Vector3): number {
     const to = this.tmp.set(point.x - from.x, point.y - from.y, point.z - from.z);
@@ -313,19 +366,21 @@ export class CombatSystem {
     return to.addScaledVector(dir, -proj).length();
   }
 
+  /** Returns true when this hit is what broke the target's shield. */
   private applyDamage(
     target: BrickAgent,
     amount: number,
     pierceShield: boolean,
     from: THREE.Vector3,
-  ): void {
+  ): boolean {
     // Directional armour (boss front plates) scales the hit before shields see it.
     const scaled = amount * target.damageScaleFrom(from);
     if (target.hasShield && !pierceShield) {
       target.absorbShield(scaled);
-      return;
+      return !target.hasShield;
     }
     target.takeDamage(scaled);
+    return false;
   }
 
   /**

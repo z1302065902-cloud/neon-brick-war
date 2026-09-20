@@ -6,6 +6,29 @@ import type { PhysicsWorld } from '../physics/PhysicsWorld';
 const CAPSULE_HALF = 0.45;
 const CAPSULE_RADIUS = 0.28;
 
+export type AgentOpts = {
+  boss?: boolean;
+  shieldTrooper?: boolean;
+  scale?: number;
+  /** Replaces the default brick figure — bosses bring their own silhouette. */
+  figure?: THREE.Group;
+  /** Collider sizing. Bosses are chunkier than grunts. */
+  half?: number;
+  radius?: number;
+  density?: number;
+};
+
+/**
+ * A damageable weak spot. `CombatSystem` reads this off any agent it hits, so a boss can
+ * expose and retract it freely without the combat layer knowing what a boss is.
+ */
+export type WeakPoint = {
+  /** World-space centre, refreshed by the owner every frame. */
+  position: THREE.Vector3;
+  radius: number;
+  multiplier: number;
+};
+
 export class BrickAgent {
   readonly group: THREE.Group;
   readonly body: RAPIER.RigidBody;
@@ -17,21 +40,25 @@ export class BrickAgent {
   shieldHp = 0;
   isBoss = false;
   isShieldTrooper = false;
+  /** Non-null only while the owner is exposing it (see BossAgent). */
+  weakPoint: WeakPoint | null = null;
   /**
    * Dead enemies are *frozen*, not removed: the rigid body is switched to Fixed and its
    * collider disabled. Freeing the body instead would leave a dangling WASM handle, and any
    * later `body.translation()` would hard-crash Rapier rather than throw.
    */
-  private readonly collider: RAPIER.Collider;
+  protected readonly collider: RAPIER.Collider;
+  protected readonly capsuleHalf: number;
+  protected readonly capsuleRadius: number;
   private corpseFrozen = false;
 
   constructor(
-    private readonly physics: PhysicsWorld,
+    protected readonly physics: PhysicsWorld,
     palette: BrickPalette,
     position: THREE.Vector3,
     team: 'player' | 'enemy',
     maxHp = 100,
-    opts?: { boss?: boolean; shieldTrooper?: boolean; scale?: number },
+    opts?: AgentOpts,
   ) {
     this.team = team;
     this.maxHp = maxHp;
@@ -42,16 +69,18 @@ export class BrickAgent {
       this.hasShield = true;
       this.shieldHp = 40;
     }
-    this.group = createBrickFigure(palette, {
-      boss: this.isBoss,
-      shield: this.isShieldTrooper,
-    });
+    this.group =
+      opts?.figure ??
+      createBrickFigure(palette, {
+        boss: this.isBoss,
+        shield: this.isShieldTrooper,
+      });
     const scale = opts?.scale ?? (this.isBoss ? 1.85 : 1);
     this.group.scale.setScalar(scale);
     this.group.position.copy(position);
 
-    const half = this.isBoss ? CAPSULE_HALF * 1.5 : CAPSULE_HALF;
-    const radius = this.isBoss ? CAPSULE_RADIUS * 1.4 : CAPSULE_RADIUS;
+    this.capsuleHalf = opts?.half ?? (this.isBoss ? CAPSULE_HALF * 1.5 : CAPSULE_HALF);
+    this.capsuleRadius = opts?.radius ?? (this.isBoss ? CAPSULE_RADIUS * 1.4 : CAPSULE_RADIUS);
 
     const desc = RAPIER.RigidBodyDesc.dynamic()
       .setTranslation(position.x, position.y, position.z)
@@ -61,10 +90,10 @@ export class BrickAgent {
       .setCcdEnabled(true);
     this.body = this.physics.world.createRigidBody(desc);
     this.collider = this.physics.world.createCollider(
-      RAPIER.ColliderDesc.capsule(half, radius)
+      RAPIER.ColliderDesc.capsule(this.capsuleHalf, this.capsuleRadius)
         .setFriction(0.9)
         .setRestitution(0)
-        .setDensity(this.isBoss ? 4 : 2),
+        .setDensity(opts?.density ?? (this.isBoss ? 4 : 2)),
       this.body,
     );
   }
@@ -72,18 +101,20 @@ export class BrickAgent {
   syncMesh(): void {
     const t = this.body.translation();
     // Capsule bottom = center - (half + radius); keep mesh feet on that plane.
-    const foot = this.capsuleFoot;
-    this.group.position.set(t.x, t.y - foot, t.z);
+    this.group.position.set(t.x, t.y - this.capsuleFoot, t.z);
   }
 
   get capsuleFoot(): number {
-    const half = this.isBoss ? CAPSULE_HALF * 1.5 : CAPSULE_HALF;
-    const radius = this.isBoss ? CAPSULE_RADIUS * 1.4 : CAPSULE_RADIUS;
-    return half + radius;
+    return this.capsuleHalf + this.capsuleRadius;
   }
 
   get standHeight(): number {
     return this.capsuleFoot;
+  }
+
+  /** Collider radius. Combat sizes its hit tolerance from this so big targets stay hittable. */
+  get radius(): number {
+    return this.capsuleRadius;
   }
 
   setYaw(radians: number): void {
@@ -113,6 +144,14 @@ export class BrickAgent {
     }
   }
 
+  /**
+   * Per-hit damage scaling from a given direction. Bosses override this for directional
+   * armour; everything else takes full damage from every angle.
+   */
+  damageScaleFrom(_from: THREE.Vector3): number {
+    return 1;
+  }
+
   absorbShield(amount: number): void {
     this.shieldHp = Math.max(0, this.shieldHp - amount);
     if (this.shieldHp <= 0) this.hasShield = false;
@@ -132,7 +171,7 @@ export class BrickAgent {
         // A corpse must stop blocking bullets, movement and the camera pull-in ray
         // immediately, even though it stays visible on the ground.
         this.freezeCorpse();
-        this.topple();
+        this.onDeath();
       } else {
         this.body.setLinvel({ x: 0, y: 0, z: 0 }, true);
       }
@@ -141,8 +180,13 @@ export class BrickAgent {
     return false;
   }
 
+  /** Overridden by bosses, which explode instead of toppling. */
+  protected onDeath(): void {
+    this.topple();
+  }
+
   /** Stop a dead agent from moving or colliding, keeping its handles valid. Idempotent. */
-  private freezeCorpse(): void {
+  protected freezeCorpse(): void {
     if (this.corpseFrozen) return;
     this.corpseFrozen = true;
     this.collider.setEnabled(false);
@@ -151,7 +195,7 @@ export class BrickAgent {
   }
 
   /** Lay the figure flat so a corpse reads as dead rather than a frozen standing statue. */
-  private topple(): void {
+  protected topple(): void {
     this.group.rotation.x = -Math.PI / 2;
   }
 

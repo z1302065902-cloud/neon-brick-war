@@ -8,11 +8,8 @@ import { createRenderer, resizeRenderer } from '../core/Renderer';
 import { TpsInput } from '../core/TpsInput';
 import { PURCHASE_URL, UnlockStore } from '../commerce/UnlockStore';
 import { BrickAgent, CAPSULE_HALF, CAPSULE_RADIUS } from '../entities/BrickAgent';
-import {
-  BOSS_PALETTE,
-  ENEMY_PALETTE,
-  PLAYER_PALETTE,
-} from '../entities/BrickCharacter';
+import { BossAgent, type BossArchetype, type BossContext } from '../entities/BossAgent';
+import { ENEMY_PALETTE, PLAYER_PALETTE } from '../entities/BrickCharacter';
 import { WorldPickup } from '../entities/WorldPickup';
 import type { LevelBuildResult } from '../levels/LevelFactory';
 import { createMap1, createMap2, createMap3 } from '../levels/Maps';
@@ -30,7 +27,6 @@ import type { WeaponId } from '../data/weapons';
 
 const BASE_SPEED = 7.2;
 const ENEMY_SPEED = 3.4;
-const BOSS_SPEED = 2.6;
 
 type Buffs = {
   haste: number;
@@ -81,6 +77,12 @@ export class Game {
   private advancing = false;
   private viewW = 0;
   private viewH = 0;
+  private boss: BossAgent | null = null;
+  private readonly pendingAdds: BrickAgent[] = [];
+  private readonly climaxAt = new THREE.Vector3();
+  private climaxLeft = 0;
+  private climaxTimer = 0;
+  private climaxStarted = false;
 
   constructor(private readonly canvas: HTMLCanvasElement) {
     this.renderer = createRenderer(canvas);
@@ -169,6 +171,11 @@ export class Game {
     );
 
     this.bossSpawned = false;
+    this.boss = null;
+    this.pendingAdds.length = 0;
+    this.climaxLeft = 0;
+    this.climaxStarted = false;
+    this.hud.setBoss(null);
     this.buffs = { haste: 0, doubleDamage: 0, decoy: 0, scan: 0 };
     this.loadout.unlock('pulse');
     if (map >= 1) this.loadout.unlock('scatter');
@@ -306,14 +313,11 @@ export class Game {
     const phys = this.physics;
     if (!phys) return;
     this.bossSpawned = true;
-    const boss = new BrickAgent(
-      phys,
-      BOSS_PALETTE,
-      new THREE.Vector3(center.x, 1.4, center.z),
-      'enemy',
-      280 + this.mapIndex * 40,
-      { boss: true, scale: 1.85 },
-    );
+
+    const archetype: BossArchetype =
+      this.mapIndex === 1 ? 'loader' : this.mapIndex === 2 ? 'carrier' : 'guardian';
+    const boss = new BossAgent(phys, archetype, new THREE.Vector3(center.x, 3.2, center.z));
+    this.boss = boss;
     this.enemies.push(boss);
     this.scene.add(boss.group);
 
@@ -332,6 +336,77 @@ export class Game {
     // Unlock a mid-tier gun when boss appears
     this.loadout.unlock('grenade');
     this.loadout.unlock('rail');
+    this.hud.setBoss({ name: boss.displayName, hp: boss.hp, maxHp: boss.maxHp, phase: boss.phase });
+  }
+
+  private maybeStartBossClimax(): void {
+    const b = this.boss;
+    if (!b || this.climaxStarted || b.alive) return;
+    this.climaxStarted = true;
+
+    // Killing the boss ends the fight. Without this the outpost can never clear while a
+    // summoned minion is still standing, and the player is left staring at a dead boss and
+    // a level that refuses to advance.
+    for (const e of this.enemies) {
+      if (e === b || !e.alive) continue;
+      const p = e.body.translation();
+      this.vfx.spawn(new THREE.Vector3(p.x, p.y, p.z), '#ff2d6a', 1.5, 0.4);
+      e.takeDamage(99999);
+    }
+
+    const t = b.body.translation();
+    this.climaxAt.set(t.x, t.y, t.z);
+    this.climaxLeft = 9;
+    this.climaxTimer = 0;
+  }
+
+  /**
+   * Staged detonation for the boss climax (§9 "neon explosion climax"). Runs on a timer so
+   * the blasts escalate over ~1.3s instead of landing as a single puff.
+   */
+  private tickBossClimax(delta: number): void {
+    if (this.climaxLeft <= 0) return;
+    this.climaxTimer -= delta;
+    if (this.climaxTimer > 0) return;
+    const progress = 1 - this.climaxLeft / 9;
+    const spread = 1.2 + progress * 2.6;
+    this.vfx.spawn(
+      new THREE.Vector3(
+        this.climaxAt.x + (Math.random() - 0.5) * spread,
+        this.climaxAt.y + 0.4 + Math.random() * 1.8,
+        this.climaxAt.z + (Math.random() - 0.5) * spread,
+      ),
+      progress > 0.66 ? '#fff4d0' : progress > 0.33 ? '#ffb703' : '#ff2d6a',
+      1.6 + progress * 3.4,
+      0.5,
+    );
+    this.audio.explosion(1 + progress);
+    this.climaxLeft -= 1;
+    this.climaxTimer = 0.14;
+    if (this.climaxLeft === 0) {
+      this.vfx.spawn(new THREE.Vector3(this.climaxAt.x, this.climaxAt.y + 1, this.climaxAt.z), '#ffe66d', 9, 1.0);
+      this.audio.explosion(2);
+      this.dropBossReward(this.climaxAt);
+    }
+  }
+
+  /** §9 "drop unique skin or next-map key" — a shard the player has to walk over. */
+  private dropBossReward(at: THREE.Vector3): void {
+    const drop = new WorldPickup('shard', new THREE.Vector3(at.x, 0, at.z));
+    this.pickups.push(drop);
+    this.scene.add(drop.group);
+  }
+
+  /** Boss attacks never touch hp directly — they funnel through here for consistent feedback. */
+  private damagePlayer(amount: number): void {
+    if (!this.player.alive || this.dead) return;
+    this.player.takeDamage(amount);
+    this.hud.hurt();
+    this.audio.hurt();
+    if (this.player.hp <= 0) {
+      this.player.alive = false;
+      this.dead = true;
+    }
   }
 
   private spawnPickupsForMap(): void {
@@ -376,6 +451,8 @@ export class Game {
     }
 
     this.vfx.update(delta);
+    this.maybeStartBossClimax();
+    this.tickBossClimax(delta);
     this.tickBuffs(delta);
 
     const look = this.input.consumeLook();
@@ -568,21 +645,35 @@ export class Game {
       case 'doubleDamage':
         this.buffs.doubleDamage = 5;
         break;
+      case 'shard': {
+        const isNew = this.unlocks.grantCosmetic();
+        this.hud.flashStatus(isNew ? 'Neon shard — skin unlocked' : 'Neon shard collected');
+        this.audio.fanfare();
+        break;
+      }
     }
   }
 
   private updateEnemies(delta: number): void {
     if (!this.input.isPointerLocked) {
       for (const e of this.enemies) {
-        if (e.alive) e.applyMoveVelocity(0, 0, ENEMY_SPEED);
+        if (!e.alive) continue;
+        if (e instanceof BossAgent) e.parkPosition();
+        else e.applyMoveVelocity(0, 0, ENEMY_SPEED);
       }
       return;
     }
 
     const pt = this.player.body.translation();
     const decoy = this.buffs.decoy > 0;
+    const ctx = this.bossContext();
+
     for (const e of this.enemies) {
       if (!e.alive) continue;
+      if (e instanceof BossAgent) {
+        e.update(delta, ctx);
+        continue;
+      }
       const et = e.body.translation();
       let tx = pt.x;
       let tz = pt.z;
@@ -593,30 +684,45 @@ export class Game {
       const dx = tx - et.x;
       const dz = tz - et.z;
       const dist = Math.hypot(dx, dz);
-      const speed = e.isBoss ? BOSS_SPEED : ENEMY_SPEED;
-      const stop = e.isBoss ? 1.6 : 1.1;
 
-      if (dist > stop) {
-        e.applyMoveVelocity((dx / dist) * speed, (dz / dist) * speed, speed);
+      if (dist > 1.1) {
+        e.applyMoveVelocity((dx / dist) * ENEMY_SPEED, (dz / dist) * ENEMY_SPEED, ENEMY_SPEED);
         e.setYaw(Math.atan2(dx, dz));
       } else {
-        e.applyMoveVelocity(0, 0, speed);
-        if (!decoy && this.player.alive && dist < stop + 0.2) {
-          const dps = e.isBoss ? 28 : 18;
-          this.player.takeDamage(dps * delta);
-          this.hud.hurt();
-          this.audio.hurt();
-          if (this.player.hp <= 0) {
-            this.player.alive = false;
-            this.dead = true;
-          }
-        }
-        // Boss slam VFX when close
-        if (e.isBoss && Math.random() < delta * 0.8) {
-          this.vfx.spawn(new THREE.Vector3(et.x, et.y, et.z), '#ffb703', 1.8, 0.3);
-        }
+        e.applyMoveVelocity(0, 0, ENEMY_SPEED);
+        if (!decoy && this.player.alive) this.damagePlayer(18 * delta);
       }
     }
+
+    // Adds summoned mid-loop are appended afterwards so the iteration stays stable.
+    if (this.pendingAdds.length) {
+      for (const add of this.pendingAdds) {
+        this.enemies.push(add);
+        this.scene.add(add.group);
+      }
+      this.pendingAdds.length = 0;
+    }
+  }
+
+  private bossContext(): BossContext {
+    return {
+      player: this.player,
+      vfx: this.vfx,
+      audio: this.audio,
+      damagePlayer: (amount) => this.damagePlayer(amount),
+      spawnAdd: (position, shielded) => {
+        if (!this.physics) return;
+        this.pendingAdds.push(
+          new BrickAgent(this.physics, ENEMY_PALETTE, position, 'enemy', shielded ? 70 : 50, {
+            shieldTrooper: shielded,
+          }),
+        );
+      },
+      onPhaseChange: () => {
+        this.hud.flashStatus(`${this.boss?.displayName ?? 'Boss'} — RAGE PHASE`);
+        this.hud.hurt();
+      },
+    };
   }
 
   private checkOutposts(): void {
@@ -771,7 +877,17 @@ export class Game {
 
   private hudRefresh(): void {
     const obj = this.level.outposts.find((o) => !o.cleared);
+    const boss = this.boss;
+    if (boss && boss.alive) {
+      this.hud.setBoss({ name: boss.displayName, hp: boss.hp, maxHp: boss.maxHp, phase: boss.phase });
+    } else {
+      this.hud.setBoss(null);
+    }
+
     let status = this.bossSpawned ? 'Defeat the Boss' : 'Clear the outpost';
+    if (boss?.alive) {
+      status = boss.phase === 2 ? 'RAGE PHASE' : 'Aim for the glowing core';
+    }
     if (this.buffs.doubleDamage > 0) status += ' · OVERCHARGE';
     if (this.buffs.haste > 0) status += ' · HASTE';
     if (this.dead) status = 'Downed — press R to respawn';

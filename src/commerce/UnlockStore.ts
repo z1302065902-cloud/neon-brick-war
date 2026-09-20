@@ -85,6 +85,18 @@ export class UnlockStore {
     this.save();
   }
 
+  /** Boss drop: the cosmetic half of the §9 cadence. */
+  grantCosmetic(): boolean {
+    if (this.state.cosmetics) return false;
+    this.state.cosmetics = true;
+    this.save();
+    return true;
+  }
+
+  get hasCosmetic(): boolean {
+    return this.state.cosmetics;
+  }
+
   get snapshot(): UnlockState {
     return { ...this.state };
   }

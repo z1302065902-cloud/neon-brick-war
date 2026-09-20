@@ -6,7 +6,9 @@ export type PickupId =
   | 'emp'
   | 'decoy'
   | 'scan'
-  | 'doubleDamage';
+  | 'doubleDamage'
+  /** Boss drop — the "unique skin" half of the §9 cadence. */
+  | 'shard';
 
 export type PickupDef = {
   id: PickupId;
@@ -24,4 +26,5 @@ export const PICKUPS: PickupDef[] = [
   { id: 'decoy', name: 'Decoy Drone', color: '#a0aec0', duration: 5 },
   { id: 'scan', name: 'Vision Scan', color: '#90cdf4', duration: 7 },
   { id: 'doubleDamage', name: 'Overcharge', color: '#ff2d6a', duration: 5 },
+  { id: 'shard', name: 'Neon Shard', color: '#ffe66d' },
 ];

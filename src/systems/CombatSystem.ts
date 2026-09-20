@@ -10,6 +10,8 @@ export type FireResult = {
   explosionAt?: THREE.Vector3;
   explosionScale?: number;
   explosionColor?: string;
+  /** Set when the shot landed on a boss weak spot — drives distinct feedback. */
+  weakHit?: boolean;
 };
 
 export class CombatSystem {
@@ -155,6 +157,10 @@ export class CombatSystem {
   ): FireResult {
     const impact = this.rayImpactPoint(world, from, dir, weapon.range, shooter);
     const radius = weapon.aoeRadius ?? 3;
+    // Only static geometry stops a blast. Bodies do not: a grenade that damaged just the
+    // frontmost enemy of a cluster is not an area weapon, and the blast wave realistically
+    // wraps around a person.
+    const bodies = this.agentColliderSet(targets);
     const hitAgents: BrickAgent[] = [];
     for (const t of targets) {
       if (!t.alive || t === shooter) continue;
@@ -163,8 +169,8 @@ export class CombatSystem {
       const d = centre.distanceTo(impact);
       if (d > radius) continue;
       // A blast does not travel through walls — no damaging enemies behind cover.
-      if (this.lineBlocked(world, impact, centre, shooter, t.body.collider(0) ?? undefined)) continue;
-      this.applyDamage(t, weapon.damage * damageMul * (1 - d / radius * 0.4), weapon.pierceShield);
+      if (this.lineBlocked(world, impact, centre, shooter, undefined, bodies)) continue;
+      this.applyDamage(t, weapon.damage * damageMul * (1 - d / radius * 0.4), weapon.pierceShield, impact);
       hitAgents.push(t);
     }
     this.vfx.beam(from, impact, weapon.muzzleColor, 0.16, 0.5, true);
@@ -199,20 +205,18 @@ export class CombatSystem {
       .filter((x) => x.proj > 0 && x.proj < weapon.range && x.lat < 2.2)
       .sort((a, b) => a.dist - b.dist);
 
+    // Lightning arcs over bodies — only walls break the chain.
+    const bodies = this.agentColliderSet(targets);
     const hitAgents: BrickAgent[] = [];
     let prev = from.clone();
-    let prevAgent: BrickAgent | null = null;
     for (let i = 0; i < ordered.length && hitAgents.length < chain; i++) {
       const agent = ordered[i]!.t;
       const p = agent.body.translation();
       const hit = new THREE.Vector3(p.x, p.y + 0.4, p.z);
-      // The arc must not jump through walls between links, and the previous link's body
-      // must be excluded or the ray starts inside it.
-      const ignore = prevAgent?.body.collider(0) ?? undefined;
-      if (this.lineBlocked(world, prev, hit, shooter, ignore)) continue;
-      prevAgent = agent;
+      // The arc must not jump through walls between links.
+      if (this.lineBlocked(world, prev, hit, shooter, undefined, bodies)) continue;
       const step = hitAgents.length;
-      this.applyDamage(agent, weapon.damage * damageMul * (1 - step * 0.15), weapon.pierceShield);
+      this.applyDamage(agent, weapon.damage * damageMul * (1 - step * 0.15), weapon.pierceShield, prev);
       hitAgents.push(agent);
       this.vfx.beam(prev, hit, weapon.muzzleColor, 0.16, 0.42, false);
       this.vfx.spawn(hit, weapon.muzzleColor, 0.85, 0.28);
@@ -233,49 +237,95 @@ export class CombatSystem {
     _spread: number,
     pierce = false,
   ): FireResult {
-    const wallDist = this.rayWallDistance(world, from, dir, weapon.range, shooter);
-    let best: BrickAgent | null = null;
-    let bestDist = wallDist;
+    // Everything the ray passes near, nearest first.
+    const candidates: { t: BrickAgent; proj: number }[] = [];
     for (const t of targets) {
       if (!t.alive || t === shooter) continue;
       const p = t.body.translation();
       const to = this.tmp2.set(p.x - from.x, p.y - from.y, p.z - from.z);
       const proj = to.dot(dir);
-      if (proj < 0 || proj > bestDist + (pierce ? 2 : 0.3)) continue;
-      const closest = from.clone().addScaledVector(dir, proj);
-      if (closest.distanceTo(new THREE.Vector3(p.x, p.y, p.z)) > 1.8) continue;
-      if (proj < bestDist || pierce) {
-        bestDist = pierce ? Math.min(bestDist, proj) : proj;
-        best = t;
-        if (!pierce) break;
-      }
+      if (proj < 0 || proj > weapon.range) continue;
+      const closest = this.tmp3.copy(from).addScaledVector(dir, proj);
+      if (closest.distanceTo(this.tmp4.set(p.x, p.y, p.z)) > 1.8) continue;
+      candidates.push({ t, proj });
     }
+    candidates.sort((a, b) => a.proj - b.proj);
+
+    /*
+     * Occlusion is resolved per body rather than against one global "wall distance".
+     * The old approach cast a single ray that did not exclude the targets, so a centred
+     * shot hit the victim's *own* capsule and then failed `proj < bestDist` — meaning
+     * accurately aimed shots did nothing while sloppy ones connected. Every hitscan weapon
+     * in the game was affected.
+     */
+    let best: BrickAgent | null = null;
+    for (const c of candidates) {
+      const p = c.t.body.translation();
+      const centre = new THREE.Vector3(p.x, p.y, p.z);
+      if (this.lineBlocked(world, from, centre, shooter, c.t.body.collider(0) ?? undefined)) continue;
+      best = c.t;
+      break;
+    }
+
     const hitAgents: BrickAgent[] = [];
+    let weakHit = false;
     if (best) {
-      this.applyDamage(best, weapon.damage * damageMul, weapon.pierceShield || pierce);
+      let amount = weapon.damage * damageMul;
+      // A boss weak spot only counts when the ray actually passes through it.
+      const wp = best.weakPoint;
+      if (wp && this.rayDistanceTo(from, dir, wp.position) <= wp.radius) {
+        amount *= wp.multiplier;
+        weakHit = true;
+      }
+      this.applyDamage(best, amount, weapon.pierceShield || pierce, from);
       hitAgents.push(best);
       const p = best.body.translation();
       const hit = new THREE.Vector3(p.x, p.y, p.z);
       this.spawnTracer(from, hit, weapon.muzzleColor, pierce);
-      this.vfx.spawn(hit, weapon.muzzleColor, pierce ? 1.4 : 0.9, 0.28);
+      this.vfx.spawn(hit, weakHit ? '#54f0a8' : weapon.muzzleColor, weakHit ? 2.2 : pierce ? 1.4 : 0.9, weakHit ? 0.4 : 0.28);
     } else {
+      const wallDist = this.rayWallDistance(world, from, dir, weapon.range, shooter);
       const end = from.clone().addScaledVector(dir, wallDist);
       this.spawnTracer(from, end, weapon.muzzleColor, pierce);
       this.vfx.spawn(end, weapon.muzzleColor, 0.55, 0.18);
     }
-    return { hitAgents };
+    return { hitAgents, weakHit };
   }
 
   private spawnTracer(from: THREE.Vector3, to: THREE.Vector3, color: string, fat = false): void {
     this.vfx.beam(from, to, color, fat ? 0.35 : 0.22, fat ? 1.0 : 0.9, fat);
   }
 
-  private applyDamage(target: BrickAgent, amount: number, pierceShield: boolean): void {
+  /** Collider handles for every agent, so blasts and arcs can ignore bodies entirely. */
+  private agentColliderSet(targets: BrickAgent[]): Set<number> {
+    const set = new Set<number>();
+    for (const t of targets) {
+      const c = t.body.collider(0);
+      if (c) set.add(c.handle);
+    }
+    return set;
+  }
+
+  /** Shortest distance from `point` to the ray `from + t*dir`. */
+  private rayDistanceTo(from: THREE.Vector3, dir: THREE.Vector3, point: THREE.Vector3): number {
+    const to = this.tmp.set(point.x - from.x, point.y - from.y, point.z - from.z);
+    const proj = to.dot(dir);
+    return to.addScaledVector(dir, -proj).length();
+  }
+
+  private applyDamage(
+    target: BrickAgent,
+    amount: number,
+    pierceShield: boolean,
+    from: THREE.Vector3,
+  ): void {
+    // Directional armour (boss front plates) scales the hit before shields see it.
+    const scaled = amount * target.damageScaleFrom(from);
     if (target.hasShield && !pierceShield) {
-      target.absorbShield(amount);
+      target.absorbShield(scaled);
       return;
     }
-    target.takeDamage(amount);
+    target.takeDamage(scaled);
   }
 
   /**
@@ -288,6 +338,7 @@ export class CombatSystem {
     to: THREE.Vector3,
     shooter: BrickAgent,
     ignore?: RAPIER.Collider,
+    ignoreSet?: Set<number>,
   ): boolean {
     const delta = this.tmp3.subVectors(to, from);
     const dist = delta.length();
@@ -298,12 +349,15 @@ export class CombatSystem {
       { x: origin.x, y: origin.y, z: origin.z },
       { x: delta.x, y: delta.y, z: delta.z },
     );
-    // The origin often sits right on the target's own surface (an impact point), so both the
-    // shooter and the body being tested must be excluded or `solid` reports a hit at toi 0.
+    // `solid: false` so a ray whose origin happens to sit inside a shape reports nothing
+    // instead of a toi-0 hit. With `solid: true` any origin inside the shooter's own capsule
+    // (or on an impact point) reads as "blocked" and silently swallows the shot.
+    // The shooter and the body under test are excluded on top of that.
     const exclude = shooter.body.collider(0) ?? undefined;
-    const predicate = (c: RAPIER.Collider) => c !== exclude && c !== ignore;
+    const predicate = (c: RAPIER.Collider) =>
+      c !== exclude && c !== ignore && !(ignoreSet?.has(c.handle) ?? false);
     return Boolean(
-      world.castRay(ray, dist - 0.5, true, undefined, undefined, undefined, undefined, predicate),
+      world.castRay(ray, dist - 0.5, false, undefined, undefined, undefined, undefined, predicate),
     );
   }
 

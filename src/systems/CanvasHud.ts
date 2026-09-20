@@ -27,6 +27,8 @@ export type HudState = {
 
 type Rect = { x: number; y: number; w: number; h: number };
 
+export type BossReadout = { name: string; hp: number; maxHp: number; phase: number };
+
 const INK = '#eaf6ff';
 const DIM = 'rgba(234,246,255,0.44)';
 const CYAN = '#2de2ff';
@@ -60,6 +62,7 @@ type Layout = {
   statusY: number;
   bannerTop: number;
   bannerBottom: number;
+  boss: Rect | null;
   narrow: boolean;
   short: boolean;
 };
@@ -80,12 +83,25 @@ export class CanvasHud {
   private hintRect: Rect | null = null;
   private statusRect: Rect | null = null;
   private bannerRect: Rect | null = null;
+  private boss: BossReadout | null = null;
+  private statusFlash: { text: string; until: number } | null = null;
+
+  /** Boss health readout — set to null once the fight ends. */
+  setBoss(readout: BossReadout | null): void {
+    this.boss = readout;
+  }
+
+  /** Temporary override for the status line, e.g. a rage-phase callout. */
+  flashStatus(text: string): void {
+    this.statusFlash = { text, until: performance.now() + 2200 };
+  }
 
   /** Test hook: the exact rects drawn on the last frame, for layout regression checks. */
   get debugRects(): Record<string, Rect> | null {
     const L = this.L;
     if (!L) return null;
     const out: Record<string, Rect> = { vitals: L.vitals, objective: L.objective, weapon: L.weapon };
+    if (L.boss) out.boss = L.boss;
     if (this.hintRect) out.hint = this.hintRect;
     if (this.statusRect) out.status = this.statusRect;
     if (this.bannerRect) out.banner = this.bannerRect;
@@ -164,8 +180,15 @@ export class CanvasHud {
     const topBlockBottom = narrow
       ? objective.y + objH
       : Math.max(vitals.y + vitalsH, objective.y + objH);
+
+    // Boss health bar claims the row directly under the top block while a boss is alive.
+    const bossW = Math.min(560, w - margin * 2);
+    const boss: Rect | null = this.boss
+      ? { x: (w - bossW) / 2, y: topBlockBottom + 8, w: bossW, h: 42 }
+      : null;
+
     // +30 keeps the hint's plate (drawn 18px above its baseline) clear of the panels below.
-    const hintY = topBlockBottom + 30;
+    const hintY = (boss ? boss.y + boss.h : topBlockBottom) + 30;
 
     const weaponH = 78;
     const pipGap = short ? 12 : 26;
@@ -188,7 +211,7 @@ export class CanvasHud {
 
     return {
       w, h, margin, panelW, vitalsH, objH, vitals, objective, hintY,
-      weapon, pipY, statusY, bannerTop, bannerBottom, narrow, short,
+      weapon, pipY, statusY, bannerTop, bannerBottom, boss, narrow, short,
     };
   }
 
@@ -225,6 +248,7 @@ export class CanvasHud {
     this.bannerRect = null;
 
     this.drawDamageVignette();
+    if (this.boss) this.drawBossBar(L);
     if (this.state) {
       this.drawVitals(L);
       this.drawObjective(L);
@@ -397,24 +421,57 @@ export class CanvasHud {
     });
   }
 
+  /**
+   * Boss health bar with a marker at the 50% line, so the rage-phase threshold is visible
+   * before it happens rather than being a surprise.
+   */
+  private drawBossBar(L: Layout): void {
+    const b = this.boss!;
+    const rect = L.boss;
+    if (!rect) return;
+    const rage = b.phase === 2;
+    this.plate(rect.x, rect.y, rect.w, rect.h, 10, rage ? 'rgba(255,90,0,0.62)' : 'rgba(255,45,106,0.5)');
+
+    const pad = 12;
+    const namePx = this.fit(b.name, rect.w - pad * 2 - 90, [11, 10, 9], fLabel);
+    this.label(b.name, rect.x + pad, rect.y + 16, rage ? AMBER : INK, namePx);
+    this.label(rage ? 'Rage phase' : 'Phase 1', rect.x + rect.w - pad, rect.y + 16, rage ? '#ff5a00' : DIM, 9, 'right');
+
+    const c = this.ctx;
+    const bx = rect.x + pad;
+    const by = rect.y + 22;
+    const bw = rect.w - pad * 2;
+    const bh = 12;
+    c.fillStyle = 'rgba(234,246,255,0.1)';
+    c.fillRect(bx, by, bw, bh);
+    const pct = Math.max(0, Math.min(1, b.hp / Math.max(1, b.maxHp)));
+    c.fillStyle = rage ? '#ff5a00' : PINK;
+    c.fillRect(bx, by, bw * pct, bh);
+    c.fillStyle = 'rgba(255,255,255,0.55)';
+    c.fillRect(bx + bw * 0.5 - 1, by - 2, 2, bh + 4);
+  }
+
   private drawStatus(L: Layout): void {
     const s = this.state!;
     // A banner already carries the message, and short viewports cannot fit both.
-    if (!s.status || this.banner !== null) return;
+    if (this.banner !== null) return;
+    const flash = this.statusFlash && this.statusFlash.until > performance.now() ? this.statusFlash.text : null;
+    const text = flash ?? s.status;
+    if (!text) return;
     const c = this.ctx;
     const maxW = L.w - L.margin * 2 - 40;
-    const px = this.fit(s.status, maxW, [12, 11, 10, 9], fLabel);
+    const px = this.fit(text, maxW, [12, 11, 10, 9], fLabel);
     c.font = fLabel(px);
-    const tw = Math.min(maxW + 34, c.measureText(s.status).width + 34);
+    const tw = Math.min(maxW + 34, c.measureText(text).width + 34);
     const y = L.statusY;
     this.statusRect = { x: (L.w - tw) / 2, y: y - 17, w: tw, h: 24 };
     c.fillStyle = 'rgba(5,9,18,0.66)';
     c.fillRect((L.w - tw) / 2, y - 17, tw, 24);
-    c.fillStyle = PINK;
+    c.fillStyle = flash ? AMBER : PINK;
     c.fillRect((L.w - tw) / 2, y - 17, 3, 24);
     c.fillStyle = INK;
     c.textAlign = 'center';
-    c.fillText(s.status.toUpperCase(), L.w / 2, y);
+    c.fillText(text.toUpperCase(), L.w / 2, y);
     c.textAlign = 'left';
   }
 

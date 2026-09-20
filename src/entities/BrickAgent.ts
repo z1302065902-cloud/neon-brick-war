@@ -42,6 +42,8 @@ export class BrickAgent {
   isShieldTrooper = false;
   /** Non-null only while the owner is exposing it (see BossAgent). */
   weakPoint: WeakPoint | null = null;
+  /** Fired once on death, after `onDeath()`. The game uses it to blow the figure apart. */
+  onDied: ((agent: BrickAgent) => void) | null = null;
   /**
    * Dead enemies are *frozen*, not removed: the rigid body is switched to Fixed and its
    * collider disabled. Freeing the body instead would leave a dangling WASM handle, and any
@@ -171,6 +173,9 @@ export class BrickAgent {
         // A corpse must stop blocking bullets, movement and the camera pull-in ray
         // immediately, even though it stays visible on the ground.
         this.freezeCorpse();
+        // Sampled before onDeath() so the bricks come off a standing figure — toppling
+        // first would scatter them in a lying-down pose.
+        this.onDied?.(this);
         this.onDeath();
       } else {
         this.body.setLinvel({ x: 0, y: 0, z: 0 }, true);

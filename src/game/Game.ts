@@ -17,6 +17,7 @@ import { PhysicsWorld } from '../physics/PhysicsWorld';
 import { disposeObject3D } from '../utils/dispose';
 import { CombatSystem } from '../systems/CombatSystem';
 import { ExplosionVfx } from '../systems/ExplosionVfx';
+import { BrickDebris } from '../systems/BrickDebris';
 import { CanvasHud } from '../systems/CanvasHud';
 import { ColliderDebug } from '../systems/ColliderDebug';
 import { AudioSystem } from '../systems/AudioSystem';
@@ -43,6 +44,7 @@ export class Game {
     new URLSearchParams(window.location.search).has('debug'),
   );
   private readonly audio = new AudioSystem();
+  private readonly debris: BrickDebris;
   private readonly camera = new THREE.PerspectiveCamera(55, 1, 0.12, 140);
   private readonly composer: EffectComposer;
   private readonly input: TpsInput;
@@ -83,6 +85,7 @@ export class Game {
   private climaxLeft = 0;
   private climaxTimer = 0;
   private climaxStarted = false;
+  private playerRevealAt = -1;
 
   constructor(private readonly canvas: HTMLCanvasElement) {
     this.renderer = createRenderer(canvas);
@@ -91,6 +94,7 @@ export class Game {
     const hudCanvas = document.querySelector<HTMLCanvasElement>('#hud-canvas');
     if (!hudCanvas) throw new Error('Missing #hud-canvas element.');
     this.hud = new CanvasHud(hudCanvas);
+    this.debris = new BrickDebris(this.scene);
 
     // Neon only reads as neon if the emissive trim actually bleeds. OutputPass applies tone
     // mapping and the sRGB conversion, which the renderer skips when drawing to a target.
@@ -175,6 +179,7 @@ export class Game {
     this.pendingAdds.length = 0;
     this.climaxLeft = 0;
     this.climaxStarted = false;
+    this.playerRevealAt = -1;
     this.hud.setBoss(null);
     this.buffs = { haste: 0, doubleDamage: 0, decoy: 0, scan: 0 };
     this.loadout.unlock('pulse');
@@ -270,6 +275,7 @@ export class Game {
     this.clearLevel();
     this.physics?.dispose();
     this.audio.dispose();
+    this.debris.dispose();
     this.renderer.dispose();
     window.__THREE_GAME_DIAGNOSTICS__ = undefined;
   }
@@ -302,12 +308,25 @@ export class Game {
         op.center.z + Math.sin(ang) * (op.radius * 0.65),
       );
       const shield = i % 3 === 2;
-      const enemy = new BrickAgent(phys, ENEMY_PALETTE, pos, 'enemy', shield ? 70 : 55, {
-        shieldTrooper: shield,
-      });
-      this.enemies.push(enemy);
-      this.scene.add(enemy.group);
+      this.addEnemy(
+        new BrickAgent(phys, ENEMY_PALETTE, pos, 'enemy', shield ? 70 : 55, {
+          shieldTrooper: shield,
+        }),
+      );
     }
+  }
+
+  /** Every hostile goes through here so the brick-shatter hook is never missed. */
+  private addEnemy(agent: BrickAgent): void {
+    agent.onDied = (a) => {
+      // The bricks *are* the corpse — leaving the intact figure visible as well would
+      // double-render the death. Bosses burst later, at the end of their explosion climax.
+      if (a.isBoss) return;
+      this.debris.burst(a.group, { force: 6 });
+      a.group.visible = false;
+    };
+    this.enemies.push(agent);
+    this.scene.add(agent.group);
   }
 
   private spawnBoss(center: THREE.Vector3): void {
@@ -329,9 +348,7 @@ export class Game {
         1.0,
         center.z + Math.sin(ang) * 4,
       );
-      const add = new BrickAgent(phys, ENEMY_PALETTE, pos, 'enemy', 50);
-      this.enemies.push(add);
-      this.scene.add(add.group);
+      this.addEnemy(new BrickAgent(phys, ENEMY_PALETTE, pos, 'enemy', 50));
     }
 
     // Unlock a mid-tier gun when boss appears
@@ -389,6 +406,8 @@ export class Game {
     if (this.climaxLeft === 0) {
       this.vfx.spawn(new THREE.Vector3(this.climaxAt.x, this.climaxAt.y + 1, this.climaxAt.z), '#ffe66d', 9, 1.0);
       this.audio.explosion(2);
+      // The payoff of the whole cadence: the boss finally comes apart into bricks.
+      if (this.boss) this.debris.burst(this.boss.group, { force: 12, spread: 1.4 });
       this.dropBossReward(this.climaxAt);
     }
   }
@@ -409,6 +428,9 @@ export class Game {
     if (this.player.hp <= 0) {
       this.player.alive = false;
       this.dead = true;
+      // The player comes apart too — respawning is the rebuild, not a teleport.
+      this.debris.burst(this.player.group, { force: 6.5 });
+      this.player.group.visible = false;
     }
   }
 
@@ -454,6 +476,11 @@ export class Game {
     }
 
     this.vfx.update(delta);
+    this.debris.update(delta);
+    if (this.playerRevealAt > 0 && this.elapsed >= this.playerRevealAt) {
+      this.playerRevealAt = -1;
+      this.player.group.visible = true;
+    }
     this.maybeStartBossClimax();
     this.tickBossClimax(delta);
     this.tickBuffs(delta);
@@ -700,10 +727,7 @@ export class Game {
 
     // Adds summoned mid-loop are appended afterwards so the iteration stays stable.
     if (this.pendingAdds.length) {
-      for (const add of this.pendingAdds) {
-        this.enemies.push(add);
-        this.scene.add(add.group);
-      }
+      for (const add of this.pendingAdds) this.addEnemy(add);
       this.pendingAdds.length = 0;
     }
   }
@@ -714,6 +738,7 @@ export class Game {
       vfx: this.vfx,
       audio: this.audio,
       damagePlayer: (amount) => this.damagePlayer(amount),
+      // Deferred: this runs inside the `this.enemies` loop, so it must not append there.
       spawnAdd: (position, shielded) => {
         if (!this.physics) return;
         this.pendingAdds.push(
@@ -932,6 +957,10 @@ export class Game {
     this.dead = false;
     this.hud.setUnlockVisible(false);
     this.player.respawn(this.checkpoint.x, this.checkpoint.y, this.checkpoint.z);
+    // Bricks converge on the spawn point, then the figure reappears.
+    this.player.group.visible = false;
+    this.debris.burst(this.player.group, { inward: true });
+    this.playerRevealAt = this.elapsed + 0.55;
     const idx = this.level.outposts.findIndex((o) => !o.cleared);
     this.spawnWaveForOutpost(idx < 0 ? 0 : idx);
   }

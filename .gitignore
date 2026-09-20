@@ -1,0 +1,9 @@
+node_modules/
+dist/
+test-results/
+artifacts/
+*.log
+.DS_Store
+
+# 修复前的手工备份（git 到位后冗余，仅留盘）
+.backup-20260919/

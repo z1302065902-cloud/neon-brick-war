@@ -25,7 +25,8 @@ export type LevelBuildResult = {
   spawnPoint: THREE.Vector3;
   halfExtent: number;
   name: string;
-  mapIndex: 1 | 2 | 3;
+  /** Zero-based level index into the campaign table. */
+  mapIndex: number;
   /** Every static solid in the arena, for exact capsule push-out. */
   blocks: SolidBox[];
 };
@@ -54,7 +55,7 @@ export function buildNeonArena(
   physics: PhysicsWorld,
   opts: {
     name: string;
-    mapIndex: 1 | 2 | 3;
+    mapIndex: number;
     floorColor: string;
     buildingColor: string;
     neonA: string;

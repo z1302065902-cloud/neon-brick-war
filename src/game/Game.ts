@@ -12,7 +12,15 @@ import { BossAgent, type BossArchetype, type BossContext } from '../entities/Bos
 import { ENEMY_PALETTE, PLAYER_PALETTE } from '../entities/BrickCharacter';
 import { WorldPickup } from '../entities/WorldPickup';
 import type { LevelBuildResult } from '../levels/LevelFactory';
-import { createMap1, createMap2, createMap3 } from '../levels/Maps';
+import { createLevel as buildLevel } from '../levels/Maps';
+import {
+  CAMPAIGN_END,
+  LEVELS,
+  TOTAL_LEVELS,
+  t as tr,
+  type Lang,
+  type Localized,
+} from '../data/story';
 import { PhysicsWorld } from '../physics/PhysicsWorld';
 import { disposeObject3D } from '../utils/dispose';
 import { CombatSystem } from '../systems/CombatSystem';
@@ -72,7 +80,7 @@ export class Game {
   private frame = 0;
   private elapsed = 0;
   private checkpoint = new THREE.Vector3();
-  private mapIndex: 1 | 2 | 3 = 1;
+  private mapIndex = 0;
   private bossSpawned = false;
   private buffs: Buffs = { haste: 0, doubleDamage: 0, decoy: 0, scan: 0 };
   private mapAdvanceTimer = 0;
@@ -86,6 +94,10 @@ export class Game {
   private climaxTimer = 0;
   private climaxStarted = false;
   private playerRevealAt = -1;
+  /** Bilingual UI: every display string routes through `tr(...)`. */
+  private lang: Lang = 'en';
+  private storyTimer = 0;
+  private storyLines: Localized[] = [];
 
   constructor(private readonly canvas: HTMLCanvasElement) {
     this.renderer = createRenderer(canvas);
@@ -109,10 +121,10 @@ export class Game {
       (dt) => this.update(dt),
       () => this.render(),
     );
-    void this.boot(1);
+    void this.boot(0);
   }
 
-  private async boot(map: 1 | 2 | 3): Promise<void> {
+  private async boot(map: number): Promise<void> {
     this.ready = false;
     this.win = false;
     this.dead = false;
@@ -147,7 +159,9 @@ export class Game {
     this.mapIndex = map;
     this.level = this.createLevel(map);
     this.scene.add(this.level.group);
-    const sky = map === 3 ? '#ffb7c8' : map === 2 ? '#d7c2ff' : '#6eb6ea';
+    // Level names come from the chapter table, so they follow the language toggle.
+    this.level.name = tr(LEVELS[map]!.name, this.lang);
+    const sky = LEVELS[map]!.sky;
     this.scene.background = new THREE.Color(sky);
     this.scene.fog = new THREE.Fog(sky, 48, 110);
 
@@ -256,12 +270,10 @@ export class Game {
     }
   }
 
-  private createLevel(map: 1 | 2 | 3): LevelBuildResult {
+  private createLevel(map: number): LevelBuildResult {
     const phys = this.physics;
     if (!phys) throw new Error('Physics not ready');
-    if (map === 2) return createMap2(phys);
-    if (map === 3) return createMap3(phys);
-    return createMap1(phys);
+    return buildLevel(phys, map, this.lang);
   }
 
   start(): void {
@@ -355,8 +367,9 @@ export class Game {
     this.loadout.unlock('grenade');
     this.loadout.unlock('rail');
     this.audio.bossSting();
-    this.hud.flashStatus(`${boss.displayName} incoming`);
-    this.hud.setBoss({ name: boss.displayName, hp: boss.hp, maxHp: boss.maxHp, phase: boss.phase });
+    const bossName = tr(LEVELS[this.mapIndex]!.boss, this.lang);
+    this.hud.flashStatus(tr([`${bossName} incoming`, `${bossName} 出现`], this.lang));
+    this.hud.setBoss({ name: bossName, hp: boss.hp, maxHp: boss.maxHp, phase: boss.phase });
   }
 
   private maybeStartBossClimax(): void {
@@ -470,6 +483,8 @@ export class Game {
     const restartRequested = this.input.consumeRestart();
     if (this.input.consumeDebugToggle()) this.colliderDebug.toggle();
     if (this.input.consumeMute()) this.audio.toggleMute();
+    if (this.input.consumeLang()) this.toggleLang();
+    this.tickStory(delta);
     if (!this.ready || this.advancing) {
       this.publishDiagnostics();
       return;
@@ -678,7 +693,11 @@ export class Game {
         break;
       case 'shard': {
         const isNew = this.unlocks.grantCosmetic();
-        this.hud.flashStatus(isNew ? 'Neon shard — skin unlocked' : 'Neon shard collected');
+        this.hud.flashStatus(
+          isNew
+            ? tr(['NEON SHARD — SKIN UNLOCKED', '霓虹碎片 — 皮肤已解锁'], this.lang)
+            : tr(['NEON SHARD COLLECTED', '已收集霓虹碎片'], this.lang),
+        );
         this.audio.fanfare();
         break;
       }
@@ -748,7 +767,7 @@ export class Game {
         );
       },
       onPhaseChange: () => {
-        this.hud.flashStatus(`${this.boss?.displayName ?? 'Boss'} — RAGE PHASE`);
+        this.hud.flashStatus(tr(['BOSS — RAGE PHASE', 'BOSS — 狂暴阶段'], this.lang));
         this.hud.hurt();
         this.audio.rageSting();
       },
@@ -789,22 +808,68 @@ export class Game {
       /* body may be mid-dispose */
     }
 
-    const next = (this.mapIndex + 1) as 1 | 2 | 3;
-    if (this.mapIndex < 3 && this.unlocks.canPlayMap(next)) {
-      // Advance almost immediately; Enter/N still works.
-      this.mapAdvanceTimer = 0.2;
-      this.hud.setUnlockVisible(true, `${this.level.name} cleared\nLoading Map ${next}…`);
-    } else if (this.mapIndex < 3) {
-      // The free demo ends here — maps 2-3 are the paid product.
+    const next = this.mapIndex + 1;
+    if (next < TOTAL_LEVELS && this.unlocks.canPlayMap(next)) {
+      // Auto-advance: the player never has to press anything to continue.
+      this.mapAdvanceTimer = 2.4;
+      this.storyLines = [...LEVELS[next]!.narration];
+      this.storyTimer = 2.4;
+      this.hud.setUnlockVisible(true, tr(['LEVEL CLEAR', '关卡完成'], this.lang));
+    } else if (next < TOTAL_LEVELS) {
+      // Free demo ends here — levels 6-10 are the paid half.
       this.mapAdvanceTimer = 0;
       this.hud.setUnlockVisible(
         true,
-        'Demo complete\nFull campaign: maps 2-3\nPress B to purchase · R to replay',
+        tr(
+          ['DEMO COMPLETE\nFULL CAMPAIGN: 5 MORE LEVELS\nPRESS B TO PURCHASE · R TO REPLAY',
+             '试玩结束\n完整战役还有 5 关\n按 B 购买 · 按 R 重玩'],
+          this.lang,
+        ),
       );
     } else {
       this.mapAdvanceTimer = 0;
-      this.hud.setUnlockVisible(true, 'Campaign complete\nPress R to replay from Map 1');
+      this.storyLines = [...CAMPAIGN_END];
+      this.storyTimer = 8;
+      this.hud.setUnlockVisible(true, tr(CAMPAIGN_END[CAMPAIGN_END.length - 1]!, this.lang));
     }
+  }
+
+  /** Advances the story-card timer and publishes the current lines to the HUD. */
+  private tickStory(delta: number): void {
+    if (this.storyTimer > 0) {
+      this.storyTimer = Math.max(0, this.storyTimer - delta);
+      if (this.storyTimer === 0) this.storyLines = [];
+    }
+    this.hud.setStory(
+      this.storyLines.map((l) => tr(l, this.lang)),
+      this.storyLines.length ? (this.storyTimer > 3 ? 1 : this.storyTimer / 3) : 0,
+    );
+  }
+
+  /** Language toggle — also rebuilds the level so objective labels follow. */
+  private toggleLang(): void {
+    this.lang = this.lang === 'en' ? 'zh' : 'en';
+    this.hud.setLang(this.lang);
+    this.hud.flashStatus(this.lang === 'zh' ? '语言：中文' : 'LANGUAGE: ENGLISH');
+    if (this.level) {
+      const chapter = LEVELS[this.mapIndex]!;
+      // The level name and every objective label are display text, so they follow the toggle.
+      this.level.name = tr(chapter.name, this.lang);
+      for (const o of this.level.outposts) {
+        const idx = ['A', 'B', 'C'].indexOf(o.id);
+        if (idx >= 0) o.label = tr(chapter.outposts[idx]!, this.lang);
+      }
+    }
+    this.hud.setBoss(
+      this.boss?.alive
+        ? {
+            name: tr(LEVELS[this.mapIndex]!.boss, this.lang),
+            hp: this.boss.hp,
+            maxHp: this.boss.maxHp,
+            phase: this.boss.phase,
+          }
+        : null,
+    );
   }
 
   /** itch.io has no client-side ownership check — the purchase happens on the itch page. */
@@ -816,8 +881,8 @@ export class Game {
     if (this.advancing) return;
     // Allow advance when cleared (win) — map 1→2 and 2→3.
     if (!this.win) return;
-    const next = (this.mapIndex + 1) as 1 | 2 | 3;
-    if (next > 3) return;
+    const next = this.mapIndex + 1;
+    if (next >= TOTAL_LEVELS) return;
     if (!this.unlocks.canPlayMap(next)) return;
 
     this.advancing = true;
@@ -914,14 +979,18 @@ export class Game {
       this.hud.setBoss(null);
     }
 
-    let status = this.bossSpawned ? 'Defeat the Boss' : 'Clear the outpost';
+    let status = this.bossSpawned
+      ? tr(['Defeat the Boss', '击败首领'], this.lang)
+      : tr(['Clear the outpost', '清空据点'], this.lang);
     if (boss?.alive) {
-      status = boss.phase === 2 ? 'RAGE PHASE' : 'Aim for the glowing core';
+      status = boss.phase === 2
+        ? tr(['RAGE PHASE', '狂暴阶段'], this.lang)
+        : tr(['Aim for the glowing core', '瞄准发光核心'], this.lang);
     }
-    if (this.buffs.doubleDamage > 0) status += ' · OVERCHARGE';
-    if (this.buffs.haste > 0) status += ' · HASTE';
-    if (this.dead) status = 'Downed — press R to respawn';
-    if (this.win) status = `${this.level.name} secured`;
+    if (this.buffs.doubleDamage > 0) status += tr([' · OVERCHARGE', ' · 过载'], this.lang);
+    if (this.buffs.haste > 0) status += tr([' · HASTE', ' · 加速'], this.lang);
+    if (this.dead) status = tr(['Downed — press R to respawn', '已倒地 — 按 R 复活'], this.lang);
+    if (this.win) status = tr([`${this.level.name} secured`, `${this.level.name} 已占领`], this.lang);
 
     const w = this.loadout.current;
     const ammo = this.loadout.ammoLeft();
@@ -934,10 +1003,12 @@ export class Game {
       hp: this.player.hp,
       maxHp: this.player.maxHp,
       shield: this.player.shieldHp,
-      weaponName: w.name,
+      weaponName: this.lang === 'zh' ? w.nameZh : w.name,
       ammoText: ammo === 'inf' ? '∞' : String(ammo),
       chargeRatio,
-      objective: obj ? `Outpost ${obj.id}: ${obj.label}` : 'Mission complete',
+      objective: obj
+        ? tr([`Outpost ${obj.id}: ${obj.label}`, `据点 ${obj.id}：${obj.label}`], this.lang)
+        : tr(['Mission complete', '任务完成'], this.lang),
       status,
       enemiesLeft: this.enemies.filter((e) => e.alive).length,
       mapName: this.level.name,
@@ -949,8 +1020,8 @@ export class Game {
   private restart(): void {
     if (this.win) {
       // Level already cleared: never respawn a wave here, that cancels the advance.
-      const next = (this.mapIndex + 1) as 1 | 2 | 3;
-      if (this.mapIndex >= 3 || !this.unlocks.canPlayMap(next)) void this.boot(1);
+      const next = this.mapIndex + 1;
+      if (next >= TOTAL_LEVELS || !this.unlocks.canPlayMap(next)) void this.boot(0);
       else this.tryAdvanceMap();
       return;
     }

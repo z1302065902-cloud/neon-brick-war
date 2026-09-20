@@ -18,6 +18,7 @@ export class TpsInput {
   private restartPressed = false;
   private debugTogglePressed = false;
   private mutePressed = false;
+  private langPressed = false;
 
   private readonly onKeyDown = (e: KeyboardEvent) => {
     // keydown auto-repeats while a key is held, so only the first event counts as a press.
@@ -26,6 +27,7 @@ export class TpsInput {
     if (firstPress && e.code === 'KeyR') this.restartPressed = true;
     if (firstPress && e.code === 'F3') this.debugTogglePressed = true;
     if (firstPress && e.code === 'KeyM') this.mutePressed = true;
+    if (firstPress && e.code === 'KeyL') this.langPressed = true;
     if (e.code.startsWith('Digit')) {
       const n = Number(e.code.replace('Digit', ''));
       if (n >= 1 && n <= 6) this.weaponDigit = n;
@@ -170,6 +172,13 @@ export class TpsInput {
   consumeMute(): boolean {
     const v = this.mutePressed;
     this.mutePressed = false;
+    return v;
+  }
+
+  /** L — toggle EN / 中文. */
+  consumeLang(): boolean {
+    const v = this.langPressed;
+    this.langPressed = false;
     return v;
   }
 

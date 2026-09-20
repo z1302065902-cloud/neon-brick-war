@@ -11,6 +11,8 @@ export type FireMode = 'hitscan' | 'scatter' | 'rail' | 'grenade' | 'arc' | 'pla
 export type WeaponDef = {
   id: WeaponId;
   name: string;
+  /** Chinese display name (bilingual UI). */
+  nameZh: string;
   mode: FireMode;
   fireRate: number;
   damage: number;
@@ -31,6 +33,7 @@ export const WEAPONS: WeaponDef[] = [
   {
     id: 'pulse',
     name: 'Pulse Pistol',
+  nameZh: '脉冲手枪',
     mode: 'hitscan',
     fireRate: 0.16,
     damage: 18,
@@ -43,6 +46,7 @@ export const WEAPONS: WeaponDef[] = [
   {
     id: 'scatter',
     name: 'Scatter SMG',
+  nameZh: '散射冲锋枪',
     mode: 'scatter',
     fireRate: 0.28,
     damage: 10,
@@ -57,6 +61,7 @@ export const WEAPONS: WeaponDef[] = [
   {
     id: 'rail',
     name: 'Rail Rifle',
+  nameZh: '轨道步枪',
     mode: 'rail',
     fireRate: 0.05,
     damage: 55,
@@ -70,6 +75,7 @@ export const WEAPONS: WeaponDef[] = [
   {
     id: 'grenade',
     name: 'Grenade Launcher',
+  nameZh: '榴弹发射器',
     mode: 'grenade',
     fireRate: 0.7,
     damage: 48,
@@ -83,6 +89,7 @@ export const WEAPONS: WeaponDef[] = [
   {
     id: 'arc',
     name: 'Arc Gun',
+  nameZh: '电弧枪',
     mode: 'arc',
     fireRate: 0.35,
     damage: 16,
@@ -96,6 +103,7 @@ export const WEAPONS: WeaponDef[] = [
   {
     id: 'plasma',
     name: 'Plasma Cannon',
+  nameZh: '等离子炮',
     mode: 'plasma',
     fireRate: 1.1,
     damage: 90,

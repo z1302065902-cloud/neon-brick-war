@@ -18,30 +18,44 @@ type MusicSpec = {
   pattern: number[];
 };
 
-/** Map 1 is open and driving, map 2 brighter, map 3 dark and urgent. */
-const MUSIC: MusicSpec[] = [
-  {
-    bpm: 96,
-    root: 110.0, // A2
-    scale: [0, 3, 5, 7, 10],
-    wave: 'triangle',
-    pattern: [0, -1, 2, -1, 4, -1, 2, 3, 0, -1, 2, -1, 3, 2, 1, -1],
-  },
-  {
-    bpm: 112,
-    root: 82.41, // E2
-    scale: [0, 2, 3, 5, 7, 8, 10],
-    wave: 'square',
-    pattern: [0, 2, -1, 4, 3, -1, 5, 4, 2, -1, 3, 5, 6, 4, 2, -1],
-  },
-  {
-    bpm: 128,
-    root: 73.42, // D2
-    scale: [0, 1, 3, 5, 7, 8, 10],
-    wave: 'sawtooth',
-    pattern: [0, 1, 3, -1, 5, 3, 1, 0, 0, 1, 3, 5, 7, 5, 3, 1],
-  },
+const SCALES: number[][] = [
+  [0, 3, 5, 7, 10], // minor pentatonic — open, driving
+  [0, 2, 3, 5, 7, 8, 10], // natural minor — brooding
+  [0, 1, 3, 5, 7, 8, 10], // phrygian — menacing
+  [0, 2, 4, 7, 9], // major pentatonic — hopeful
+  [0, 1, 4, 5, 7, 8, 11], // double harmonic — alien
 ];
+
+/** Ten roots, one per level, descending as the campaign goes deeper. */
+const ROOTS = [110.0, 98.0, 87.31, 92.5, 82.41, 77.78, 73.42, 69.3, 65.41, 61.74];
+const WAVES: OscillatorType[] = ['triangle', 'square', 'sawtooth'];
+
+/**
+ * Every level gets its own track rather than cycling three: tempo, key, scale and timbre are
+ * all derived from the level index, so the campaign audibly deepens as it goes.
+ */
+function specForLevel(index: number): MusicSpec {
+  const scale = SCALES[index % SCALES.length]!;
+  const len = scale.length;
+  const pattern: number[] = [];
+  for (let i = 0; i < 16; i++) {
+    // Rests on the 4th and 8th beats keep it from becoming a wall of notes.
+    if (i === 7 || i === 15) {
+      pattern.push(-1);
+      continue;
+    }
+    // Up the scale for the first half, back down for the second.
+    const step = i < 8 ? i % len : len - 1 - ((i - 8) % len);
+    pattern.push(step);
+  }
+  return {
+    bpm: 92 + (index % 10) * 4,
+    root: ROOTS[index % ROOTS.length]!,
+    scale,
+    wave: WAVES[index % WAVES.length]!,
+    pattern,
+  };
+}
 
 export class AudioSystem {
   private context: AudioContext | null = null;
@@ -246,10 +260,10 @@ export class AudioSystem {
 
   // ------------------------------------------------------------------ music
 
-  /** Switches the loop to a map's theme. Safe to call before the first user gesture. */
-  startMusic(mapIndex: number): void {
-    this.pendingMap = mapIndex;
-    this.music = MUSIC[(mapIndex - 1) % MUSIC.length]!;
+  /** Switches the loop to a level's theme. Safe to call before the first user gesture. */
+  startMusic(levelIndex: number): void {
+    this.pendingMap = levelIndex;
+    this.music = specForLevel(levelIndex);
     this.step = 0;
     if (!this.unlocked) return;
     this.beginLoop();
@@ -295,12 +309,18 @@ export class AudioSystem {
     if (step % 8 === 0) {
       this.tone('triangle', spec.root / 2, spec.root / 2, 0.5, 0.11, at, bus);
     }
-    // Kick.
+    // Kick, with a pickup hit late in the bar.
     if (step % 8 === 0 || step % 16 === 11) {
       this.tone('sine', 110, 42, 0.16, 0.17, at, bus);
     }
-    // Hat.
+    // Hat on the off-beats.
     if (step % 4 === 2) this.burst(0.025, 0.022, 8000, at, bus);
+    // Pad: a slow root+fifth swell at the top of each half bar, well under the arp.
+    if (step % 8 === 0) {
+      const padDur = (60 / spec.bpm / 4) * 7;
+      this.tone('sine', semi(0) * 2, semi(0) * 2, padDur, 0.018, at, bus);
+      this.tone('sine', semi(2) * 2, semi(2) * 2, padDur, 0.013, at, bus);
+    }
     // Arp line.
     if (deg >= 0) {
       this.tone(spec.wave, semi(deg), semi(deg) * 0.99, 0.14, 0.032, at, bus);

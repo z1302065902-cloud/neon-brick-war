@@ -23,6 +23,9 @@ const KEY = 'neon-brick-war-unlocks';
 
 const DEFAULT: UnlockState = { campaign: false, cosmetics: false };
 
+/** Levels 0..FREE_LEVELS-1 ship in the free demo. */
+export const FREE_LEVELS = 5;
+
 /** Set VITE_PURCHASE_URL to the live itch page before shipping. */
 export const PURCHASE_URL =
   (import.meta.env.VITE_PURCHASE_URL as string | undefined) ?? 'https://itch.io/';
@@ -71,8 +74,9 @@ export class UnlockStore {
     return this.mode === 'gated';
   }
 
-  canPlayMap(index: 1 | 2 | 3): boolean {
-    return index === 1 || this.campaignUnlocked;
+  /** Levels 0-4 (the free demo) are always playable; 5-9 need the campaign. */
+  canPlayMap(index: number): boolean {
+    return index < FREE_LEVELS || this.campaignUnlocked;
   }
 
   /**

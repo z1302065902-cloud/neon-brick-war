@@ -29,6 +29,9 @@ type Rect = { x: number; y: number; w: number; h: number };
 
 export type BossReadout = { name: string; hp: number; maxHp: number; phase: number };
 
+/** UI language. Every label below is bilingual; nothing is hard-coded English. */
+export type HudLang = 'en' | 'zh';
+
 const INK = '#eaf6ff';
 const DIM = 'rgba(234,246,255,0.44)';
 const CYAN = '#2de2ff';
@@ -84,7 +87,26 @@ export class CanvasHud {
   private statusRect: Rect | null = null;
   private bannerRect: Rect | null = null;
   private boss: BossReadout | null = null;
+  private lang: HudLang = 'en';
+  private storyLines: string[] = [];
+  private storyAlpha = 0;
+  private storyRect: Rect | null = null;
   private statusFlash: { text: string; until: number } | null = null;
+
+  setLang(lang: HudLang): void {
+    this.lang = lang;
+  }
+
+  /** Story card during level transitions; alpha 0..1 drives the fade. */
+  setStory(lines: string[], alpha: number): void {
+    this.storyLines = lines;
+    this.storyAlpha = alpha;
+  }
+
+  /** Bilingual label lookup. */
+  private txt(en: string, zh: string): string {
+    return this.lang === 'zh' ? zh : en;
+  }
 
   /** Boss health readout — set to null once the fight ends. */
   setBoss(readout: BossReadout | null): void {
@@ -105,6 +127,7 @@ export class CanvasHud {
     if (this.hintRect) out.hint = this.hintRect;
     if (this.statusRect) out.status = this.statusRect;
     if (this.bannerRect) out.banner = this.bannerRect;
+    if (this.storyRect) out.story = this.storyRect;
     if (this.state) {
       const total = Math.max(1, this.state.unlockedKeys.length);
       const pipW = Math.min(26, (L.w - L.margin * 2 - (total - 1) * 6) / total);
@@ -246,6 +269,7 @@ export class CanvasHud {
     this.hintRect = null;
     this.statusRect = null;
     this.bannerRect = null;
+    this.storyRect = null;
 
     this.drawDamageVignette();
     if (this.boss) this.drawBossBar(L);
@@ -257,7 +281,10 @@ export class CanvasHud {
     }
     this.drawCrosshair();
     if (this.hint) this.drawHint(L);
-    if (this.banner !== null) this.drawBanner(L, this.banner);
+    // A story card and a banner say the same kind of thing and share a band, so the
+    // story wins while it is on screen.
+    if (this.storyAlpha > 0 && this.storyLines.length) this.drawStory(L);
+    else if (this.banner !== null) this.drawBanner(L, this.banner);
   }
 
   // ---------------------------------------------------------------- pieces
@@ -321,8 +348,8 @@ export class CanvasHud {
     this.plate(x, y, w, h);
     const pad = Math.min(16, w * 0.06);
 
-    this.label('Integrity', x + pad, y + 20);
-    this.label(`Max ${s.maxHp}`, x + w - pad, y + 20, DIM, 9, 'right');
+    this.label(this.txt('Integrity', '完整度'), x + pad, y + 20);
+    this.label(`${this.txt('Max', '上限')} ${s.maxHp}`, x + w - pad, y + 20, DIM, 9, 'right');
 
     const pct = Math.max(0, Math.min(1, s.hp / Math.max(1, s.maxHp)));
     const hpColor = pct > 0.55 ? CYAN : pct > 0.25 ? AMBER : PINK;
@@ -360,7 +387,7 @@ export class CanvasHud {
       c.fillRect(bx, sy, trackW, 5);
       c.fillStyle = '#c77dff';
       c.fillRect(bx, sy, (Math.min(1, s.shield / 80)) * trackW, 5);
-      this.label(`Shield ${Math.ceil(s.shield)}`, bx + trackW + 10, sy + 6, '#c77dff', 9);
+      this.label(`${this.txt('Shield', '护盾')} ${Math.ceil(s.shield)}`, bx + trackW + 10, sy + 6, '#c77dff', 9);
     }
   }
 
@@ -370,7 +397,7 @@ export class CanvasHud {
     this.plate(x, y, w, h);
     const pad = Math.min(16, w * 0.06);
 
-    this.label('Objective', x + pad, y + 20);
+    this.label(this.txt('Objective', '目标'), x + pad, y + 20);
     const namePx = this.fit(s.mapName, w - pad * 2, [17, 15, 13], fValue);
     this.value(s.mapName, x + pad, y + 46, INK, namePx);
 
@@ -380,7 +407,7 @@ export class CanvasHud {
 
     if (s.enemiesLeft > 0) {
       this.value(`${s.enemiesLeft}`, x + w - pad, y + 46, PINK, 22, 'right');
-      this.label('Hostiles', x + w - pad, y + 68, PINK, 9, 'right');
+      this.label(this.txt('Hostiles', '敌人'), x + w - pad, y + 68, PINK, 9, 'right');
     }
   }
 
@@ -390,7 +417,7 @@ export class CanvasHud {
     this.plate(x, y, w, h, 14, 'rgba(255,45,106,0.42)');
     const pad = Math.min(16, w * 0.06);
 
-    this.label('Weapon', x + pad, y + 21);
+    this.label(this.txt('Weapon', '武器'), x + pad, y + 21);
     const ammoW = this.ctx.measureText(s.ammoText).width;
     const namePx = this.fit(s.weaponName, w - pad * 2 - ammoW - 16, [20, 17, 15, 13], fValue);
     this.value(s.weaponName, x + pad, y + 48, INK, namePx);
@@ -404,7 +431,7 @@ export class CanvasHud {
       this.ctx.fillRect(bx, by, bw, 5);
       this.ctx.fillStyle = s.chargeRatio >= 1 ? GREEN : '#c77dff';
       this.ctx.fillRect(bx, by, bw * Math.min(1, s.chargeRatio), 5);
-      this.label(s.chargeRatio >= 1 ? 'Charged' : 'Charging', bx, by - 4, s.chargeRatio >= 1 ? GREEN : '#c77dff', 9);
+      this.label(s.chargeRatio >= 1 ? this.txt('Charged', '已充能') : this.txt('Charging', '充能中'), bx, by - 4, s.chargeRatio >= 1 ? GREEN : '#c77dff', 9);
     }
 
     // Slot pips — only the slots the player can actually reach are drawn lit.
@@ -435,7 +462,7 @@ export class CanvasHud {
     const pad = 12;
     const namePx = this.fit(b.name, rect.w - pad * 2 - 90, [11, 10, 9], fLabel);
     this.label(b.name, rect.x + pad, rect.y + 16, rage ? AMBER : INK, namePx);
-    this.label(rage ? 'Rage phase' : 'Phase 1', rect.x + rect.w - pad, rect.y + 16, rage ? '#ff5a00' : DIM, 9, 'right');
+    this.label(rage ? this.txt('Rage phase', '狂暴阶段') : this.txt('Phase 1', '第一阶段'), rect.x + rect.w - pad, rect.y + 16, rage ? '#ff5a00' : DIM, 9, 'right');
 
     const c = this.ctx;
     const bx = rect.x + pad;
@@ -534,11 +561,64 @@ export class CanvasHud {
     c.fillRect(0, 0, this.w, this.h);
   }
 
+  /**
+   * Cutscene-style story card: a letterboxed band across the middle with the narration
+   * centred. Fades on `storyAlpha` so the level transition is not an abrupt cut.
+   */
+  private drawStory(L: Layout): void {
+    const c = this.ctx;
+    const a = Math.max(0, Math.min(1, this.storyAlpha));
+    const maxW = L.w - L.margin * 2 - 40;
+    const px = this.fitLongest(this.storyLines, maxW, [26, 22, 19, 16, 14], fValue);
+    c.font = fValue(px);
+    let widest = 0;
+    for (const line of this.storyLines) widest = Math.max(widest, c.measureText(line).width);
+    const bw = Math.min(L.w, widest + 100);
+    const bh = 30 + this.storyLines.length * (px + 12);
+    const x = (L.w - bw) / 2;
+    const freeTop = L.bannerTop;
+    const freeBottom = Math.max(freeTop + bh, L.bannerBottom);
+    const y = Math.max(freeTop, Math.min(freeBottom - bh, (freeTop + freeBottom - bh) / 2));
+
+    this.storyRect = { x, y, w: bw, h: bh };
+    c.globalAlpha = a;
+    c.fillStyle = 'rgba(3,5,12,0.78)';
+    c.fillRect(x, y, bw, bh);
+    c.fillStyle = AMBER;
+    c.fillRect(x, y, bw, 2);
+    c.fillRect(x, y + bh - 2, bw, 2);
+
+    c.textAlign = 'center';
+    c.textBaseline = 'middle';
+    this.storyLines.forEach((line, i) => {
+      const last = i === this.storyLines.length - 1;
+      c.fillStyle = last ? AMBER : INK;
+      c.font = fValue(px);
+      c.fillText(line, L.w / 2, y + 26 + i * (px + 12));
+    });
+    c.textBaseline = 'alphabetic';
+    c.textAlign = 'left';
+    c.globalAlpha = 1;
+  }
+
+  /** Largest font size at which every line fits. */
+  private fitLongest(lines: string[], maxW: number, sizes: number[], font: (px: number) => string): number {
+    const c = this.ctx;
+    for (const px of sizes) {
+      c.font = font(px);
+      if (lines.every((l) => c.measureText(l).width <= maxW)) return px;
+    }
+    return sizes[sizes.length - 1]!;
+  }
+
   private drawHint(L: Layout): void {
     const c = this.ctx;
     const text = L.narrow
-      ? 'WASD move · LMB fire · 1-6 swap · F3 colliders'
-      : 'Click canvas to play · WASD move · LMB / Space fire · 1-6 or Q E swap · F3 colliders';
+      ? this.txt('WASD move · LMB fire · 1-6 swap · L 语言', 'WASD 移动 · 左键开火 · 1-6 换枪 · L 语言')
+      : this.txt(
+          'Click canvas to play · WASD move · LMB / Space fire · 1-6 or Q E swap · L 中文 · F3 colliders',
+          '点击画布开始 · WASD 移动 · 左键/空格 开火 · 1-6 或 Q E 换枪 · L English · F3 碰撞体',
+        );
     const maxW = L.w - L.margin * 2 - 36;
     const px = this.fit(text, maxW, [12, 11, 10, 9], fLabel);
     c.font = fLabel(px);

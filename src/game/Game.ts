@@ -12,7 +12,7 @@ import { BossAgent, type BossArchetype, type BossContext } from '../entities/Bos
 import { ENEMY_PALETTE, PLAYER_PALETTE } from '../entities/BrickCharacter';
 import { WorldPickup } from '../entities/WorldPickup';
 import type { LevelBuildResult } from '../levels/LevelFactory';
-import { createLevel as buildLevel } from '../levels/Maps';
+import { createLevel as buildLevel, gradingFor } from '../levels/Maps';
 import {
   CAMPAIGN_END,
   LEVELS,
@@ -36,6 +36,8 @@ import type { WeaponId } from '../data/weapons';
 
 const BASE_SPEED = 7.2;
 const ENEMY_SPEED = 3.4;
+/** With light damping this clears roughly 1.6m, enough to reach a deck edge directly. */
+const JUMP_SPEED = 9;
 
 type Buffs = {
   haste: number;
@@ -55,6 +57,11 @@ export class Game {
   private readonly debris: BrickDebris;
   private readonly camera = new THREE.PerspectiveCamera(55, 1, 0.12, 140);
   private readonly composer: EffectComposer;
+  private readonly bloom: UnrealBloomPass;
+  private hemi!: THREE.HemisphereLight;
+  private key!: THREE.DirectionalLight;
+  private fill!: THREE.PointLight;
+  private rim!: THREE.PointLight;
   private readonly input: TpsInput;
   private readonly hud: CanvasHud;
   private readonly unlocks = new UnlockStore();
@@ -115,7 +122,8 @@ export class Game {
     this.composer.addPass(new RenderPass(this.scene, this.camera));
     // High threshold so only genuinely emissive trim blooms — a low one turns the whole
     // pastel arena into haze. The design spec asks for "modest bloom".
-    this.composer.addPass(new UnrealBloomPass(new THREE.Vector2(1, 1), 0.5, 0.55, 0.95));
+    this.bloom = new UnrealBloomPass(new THREE.Vector2(1, 1), 0.5, 0.55, 0.95);
+    this.composer.addPass(this.bloom);
     this.composer.addPass(new OutputPass());
 
     this.loop = new Loop(
@@ -164,7 +172,7 @@ export class Game {
     this.level.name = tr(LEVELS[map]!.name, this.lang);
     const sky = LEVELS[map]!.sky;
     this.scene.background = new THREE.Color(sky);
-    this.scene.fog = new THREE.Fog(sky, 48, 110);
+    this.applyGrading(map, sky);
 
     this.player = new BrickAgent(
       this.physics,
@@ -221,10 +229,32 @@ export class Game {
     this.publishDiagnostics();
   }
 
+  /**
+   * Per-level colour grade. Lighting is the single biggest lever on how a level *feels*, so
+   * every one of exposure, fog depth, key tint, fill colour and bloom strength is derived
+   * from the chapter rather than fixed globally.
+   */
+  private applyGrading(map: number, sky: string): void {
+    const g = gradingFor(map);
+    this.renderer.toneMappingExposure = g.exposure;
+    this.scene.fog = new THREE.Fog(sky, g.fogNear, g.fogFar);
+    this.bloom.strength = g.bloom;
+    if (!this.hemi) return;
+    this.hemi.intensity = g.hemi;
+    this.key.intensity = g.key;
+    this.key.color.set(g.keyColor);
+    this.fill.intensity = g.fill;
+    this.fill.color.set(g.fillColor);
+    this.rim.color.set(LEVELS[map]!.neonB);
+    this.rim.intensity = 1.2 + (map / 9) * 1.2;
+  }
+
   private setupLights(): void {
     const hemi = new THREE.HemisphereLight('#ffffff', '#7ec8ff', 1.15);
+    this.hemi = hemi;
     this.scene.add(hemi);
     const key = new THREE.DirectionalLight('#fff7e8', 1.35);
+    this.key = key;
     key.position.set(-8, 16, 10);
     key.castShadow = true;
     key.shadow.mapSize.set(2048, 2048);
@@ -243,9 +273,11 @@ export class Game {
     this.scene.add(key);
     const neonFill = new THREE.PointLight('#1ec8ff', 2.2, 40);
     neonFill.position.set(0, 6, 0);
+    this.fill = neonFill;
     this.scene.add(neonFill);
     const pink = new THREE.PointLight('#ff2d6a', 1.6, 35);
     pink.position.set(10, 5, 8);
+    this.rim = pink;
     this.scene.add(pink);
   }
 
@@ -485,6 +517,7 @@ export class Game {
     if (this.input.consumeDebugToggle()) this.colliderDebug.toggle();
     if (this.input.consumeMute()) this.audio.toggleMute();
     if (this.input.consumeLang()) this.toggleLang();
+    if (this.input.consumeJump()) this.player.jump(JUMP_SPEED);
     const vol = this.input.consumeVolume();
     if (vol) this.hud.showVolume(this.audio.nudgeVolume(vol));
     this.tickStory(delta);
@@ -568,6 +601,7 @@ export class Game {
       return;
     }
 
+    this.player.updateGround();
     this.player.setWeaponColor(this.loadout.current.muzzleColor);
 
     const speed = BASE_SPEED * (this.buffs.haste > 0 ? 1.45 : 1);
@@ -740,6 +774,7 @@ export class Game {
         e.update(delta, ctx);
         continue;
       }
+      e.updateGround();
       const et = e.body.translation();
       let tx = pt.x;
       let tz = pt.z;
@@ -937,9 +972,14 @@ export class Game {
     // probe this also recovers a capsule that has ended up deep inside a building.
     const r = CAPSULE_RADIUS;
     const half = CAPSULE_HALF;
+    const feet = t.y - half - r;
     for (const b of this.level.blocks) {
       // 0.06 slack so a capsule resting on top of a solid is not ejected sideways.
-      if (t.y + half + r <= b.y - b.hh + 0.06 || t.y - half - r >= b.y + b.hh - 0.06) continue;
+      if (t.y + half + r <= b.y - b.hh + 0.06 || feet >= b.y + b.hh - 0.06) continue;
+      // Anything the player can simply step onto is not a wall. This solver is horizontal
+      // only, so without this it shoves the player away from every staircase tread and no
+      // flight of stairs in the game is climbable — the whole multi-level feature dies.
+      if (b.y + b.hh <= feet + 0.5) continue;
       const dx = x - b.x;
       const dz = z - b.z;
       const overlapX = b.hw + r - Math.abs(dx);

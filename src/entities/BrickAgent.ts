@@ -55,6 +55,9 @@ export class BrickAgent {
   private corpseFrozen = false;
   /** Walk-cycle phase; advances continuously so the gait never pops. */
   private animPhase = 0;
+  /** True while a downward probe finds footing. Jumping needs this. */
+  grounded = false;
+  private readonly groundRay = new RAPIER.Ray({ x: 0, y: 0, z: 0 }, { x: 0, y: -1, z: 0 });
 
   constructor(
     protected readonly physics: PhysicsWorld,
@@ -90,7 +93,10 @@ export class BrickAgent {
       .setTranslation(position.x, position.y, position.z)
       .lockRotations()
       .setCanSleep(false)
-      .setLinearDamping(6)
+      // Low on purpose. Horizontal control comes from applyMoveVelocity() setting the
+      // velocity every frame, so damping was only ever acting as a brake on the jump arc —
+      // at 6 it ate most of the impulse and a jump cleared barely half a metre.
+      .setLinearDamping(0.4)
       .setCcdEnabled(true);
     this.body = this.physics.world.createRigidBody(desc);
     this.collider = this.physics.world.createCollider(
@@ -141,6 +147,45 @@ export class BrickAgent {
     // A slight forward lean into the run.
     rig.body.rotation.x = swing * 0.1;
     rig.head.rotation.x = -swing * 0.05;
+  }
+
+  /**
+   * Footing probe. A short downward ray from just above the capsule's bottom, excluding the
+   * agent itself. Cheap enough to run every frame and it is what makes jumping feel
+   * predictable instead of allowing a second hop in mid-air.
+   */
+  updateGround(): void {
+    if (!this.alive) {
+      this.grounded = false;
+      return;
+    }
+    const t = this.body.translation();
+    const originY = t.y - this.capsuleFoot + 0.08;
+    this.groundRay.origin.x = t.x;
+    this.groundRay.origin.y = originY;
+    this.groundRay.origin.z = t.z;
+    const exclude = this.collider;
+    const hit = this.physics.world.castRay(
+      this.groundRay,
+      0.22,
+      true,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      (c) => c !== exclude,
+    );
+    const v = this.body.linvel();
+    this.grounded = Boolean(hit) && v.y <= 0.35;
+  }
+
+  /** Vertical impulse. No-op unless standing on something. */
+  jump(impulse: number): boolean {
+    if (!this.alive || !this.grounded) return false;
+    const v = this.body.linvel();
+    this.body.setLinvel({ x: v.x, y: impulse, z: v.z }, true);
+    this.grounded = false;
+    return true;
   }
 
   get capsuleFoot(): number {

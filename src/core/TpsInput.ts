@@ -20,6 +20,7 @@ export class TpsInput {
   private mutePressed = false;
   private langPressed = false;
   private volumeDir: 1 | -1 | 0 = 0;
+  private jumpPressed = false;
 
   private readonly onKeyDown = (e: KeyboardEvent) => {
     // keydown auto-repeats while a key is held, so only the first event counts as a press.
@@ -41,7 +42,8 @@ export class TpsInput {
     if (e.code === 'KeyN' || e.code === 'Enter' || e.code === 'NumpadEnter') {
       this.nextMapPressed = true;
     }
-    if (e.code === 'Space' || e.code === 'KeyJ') this.fireQueued = true;
+    if (firstPress && e.code === 'Space') this.jumpPressed = true;
+    if (e.code === 'KeyJ') this.fireQueued = true;
     if (
       [
         'Space',
@@ -148,11 +150,8 @@ export class TpsInput {
 
   /** True for a click, a held button, or Space/J — survives mouseup-before-frame. */
   consumeFire(): boolean {
-    const pressed =
-      this.fireQueued ||
-      this.fireHeld ||
-      this.keys.has('Space') ||
-      this.keys.has('KeyJ');
+    // Space used to double as fire; it is jump now, so fire is LMB or J only.
+    const pressed = this.fireQueued || this.fireHeld || this.keys.has('KeyJ');
     this.fireQueued = false;
     return pressed;
   }
@@ -161,6 +160,13 @@ export class TpsInput {
   consumeRestart(): boolean {
     const v = this.restartPressed;
     this.restartPressed = false;
+    return v;
+  }
+
+  /** Space — jump. Edge-triggered so holding it does not bunny-hop. */
+  consumeJump(): boolean {
+    const v = this.jumpPressed;
+    this.jumpPressed = false;
     return v;
   }
 

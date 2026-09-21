@@ -1,6 +1,12 @@
 import * as THREE from 'three';
 import type { PhysicsWorld } from '../physics/PhysicsWorld';
-import { buildNeonArena, type DeckSpec, type LevelBuildResult, type Outpost, type StairSpec } from './LevelFactory';
+import {
+  buildNeonArena,
+  type DeckSpec,
+  type LevelBuildResult,
+  type Outpost,
+  type StairSpec,
+} from './LevelFactory';
 import { createSkyline } from './Skyline';
 import { LEVELS, type Lang, t } from '../data/story';
 
@@ -74,17 +80,37 @@ function outpostsFor(index: number, lang: Lang): Outpost[] {
  * Blocks and towers, scattered clear of the outpost rings and of each other. Later levels get
  * a denser, taller city, which is most of what makes the campaign feel like it escalates.
  */
+/**
+ * Footprint a stair run occupies, measured from its spec. Used to keep buildings off it —
+ * a staircase with a tower dropped on top is a staircase nobody can climb.
+ */
+function stairFootprint(s: StairSpec): { x0: number; x1: number; z0: number; z1: number } {
+  const run = s.run ?? Math.max(2.4, (s.y1 - s.y0) * 2.0);
+  const dx = s.dir === 'e' ? 1 : s.dir === 'w' ? -1 : 0;
+  const dz = s.dir === 's' ? 1 : s.dir === 'n' ? -1 : 0;
+  const half = s.w / 2;
+  return {
+    x0: Math.min(s.x, s.x + dx * run) - (dx ? 0 : half),
+    x1: Math.max(s.x, s.x + dx * run) + (dx ? 0 : half),
+    z0: Math.min(s.z, s.z + dz * run) - (dz ? 0 : half),
+    z1: Math.max(s.z, s.z + dz * run) + (dz ? 0 : half),
+  };
+}
+
 function buildingsFor(
   index: number,
   outposts: Outpost[],
   decks: DeckSpec[],
+  stairs: StairSpec[],
 ): Array<[number, number, number, number, number]> {
   const rnd = mulberry32(index * 613 + 11);
   const out: Array<[number, number, number, number, number]> = [];
   const want = 8 + (index % 4) + Math.floor(index / 3);
+  const runs = stairs.map(stairFootprint);
   const clear = (x: number, z: number, w: number, d: number) =>
     outposts.every((o) => Math.hypot(x - o.center.x, z - o.center.z) > o.radius + w) &&
-    decks.every((k) => Math.abs(x - k.x) > k.w / 2 + w / 2 + 1.5 || Math.abs(z - k.z) > k.d / 2 + d / 2 + 1.5);
+    decks.every((k) => Math.abs(x - k.x) > k.w / 2 + w / 2 + 1.5 || Math.abs(z - k.z) > k.d / 2 + d / 2 + 1.5) &&
+    runs.every((r) => x - w / 2 - 1.2 > r.x1 || r.x0 > x + w / 2 + 1.2 || z - d / 2 - 1.2 > r.z1 || r.z0 > z + d / 2 + 1.2);
 
   let guard = 0;
   while (out.length < want && guard++ < 400) {
@@ -117,25 +143,29 @@ function verticalFor(
 
   const place = (x: number, z: number, w: number, d: number, y: number) => {
     decks.push({ x, z, w, d, y });
-    // Stair descends away from the deck toward the arena centre.
+    // Ramp line, running from the deck edge out toward the arena centre.
     const towardsCentre = Math.atan2(-z, -x);
     const dir: StairSpec['dir'] =
       Math.abs(Math.cos(towardsCentre)) > Math.abs(Math.sin(towardsCentre))
         ? Math.cos(towardsCentre) > 0 ? 'e' : 'w'
         : Math.sin(towardsCentre) > 0 ? 's' : 'n';
-    const dx = dir === 'e' ? 1 : dir === 'w' ? -1 : 0;
-    const dz = dir === 's' ? 1 : dir === 'n' ? -1 : 0;
-    const steps = Math.max(2, Math.round(y / 0.22));
-    const run = steps * 0.44;
+    const outX = dir === 'e' ? 1 : dir === 'w' ? -1 : 0;
+    const outZ = dir === 's' ? 1 : dir === 'n' ? -1 : 0;
+    const run = Math.max(2.4, y * 2.0);
+    // addRamp climbs from its anchor in the +dir direction, so anchor it at the far end and
+    // point it back down-and-in toward the deck edge. Anchoring at the edge and pointing
+    // outward laid the ramp straight across the deck's own footprint.
+    const inward: StairSpec['dir'] =
+      outX > 0 ? 'w' : outX < 0 ? 'e' : outZ > 0 ? 'n' : 's';
     stairs.push({
-      x: x + dx * (w / 2),
-      z: z + dz * (d / 2),
+      x: x + outX * (w / 2 + run),
+      z: z + outZ * (d / 2 + run),
       w: 2.6,
       y0: 0,
       y1: y,
-      dir,
+      dir: inward,
+      run,
     });
-    void run;
   };
 
   // One deck overlooking each of the first two outposts.
@@ -181,7 +211,7 @@ export function createLevel(physics: PhysicsWorld, index: number, lang: Lang): L
     neonB: chapter.neonB,
     outposts,
     spawn,
-    buildings: buildingsFor(index, outposts, decks),
+    buildings: buildingsFor(index, outposts, decks, stairs),
     decks,
     stairs,
   });

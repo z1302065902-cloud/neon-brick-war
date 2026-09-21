@@ -974,12 +974,10 @@ export class Game {
     const half = CAPSULE_HALF;
     const feet = t.y - half - r;
     for (const b of this.level.blocks) {
+      // Ramps are sloped; this solver is axis-aligned and would read one as a wall.
+      if (b.ramp) continue;
       // 0.06 slack so a capsule resting on top of a solid is not ejected sideways.
       if (t.y + half + r <= b.y - b.hh + 0.06 || feet >= b.y + b.hh - 0.06) continue;
-      // Anything the player can simply step onto is not a wall. This solver is horizontal
-      // only, so without this it shoves the player away from every staircase tread and no
-      // flight of stairs in the game is climbable — the whole multi-level feature dies.
-      if (b.y + b.hh <= feet + 0.5) continue;
       const dx = x - b.x;
       const dz = z - b.z;
       const overlapX = b.hw + r - Math.abs(dx);

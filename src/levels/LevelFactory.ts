@@ -1,4 +1,5 @@
 import * as THREE from 'three';
+import RAPIER from '@dimforge/rapier3d-compat';
 import type { PhysicsWorld } from '../physics/PhysicsWorld';
 
 export type Outpost = {
@@ -19,6 +20,8 @@ export type StairSpec = {
   y0: number;
   y1: number;
   dir: 'n' | 's' | 'e' | 'w';
+  /** Horizontal distance covered. Defaults to twice the rise. */
+  run?: number;
 };
 
 /** Axis-aligned solid, mirrored from a static collider so push-out can be solved exactly. */
@@ -29,6 +32,12 @@ export type SolidBox = {
   hw: number;
   hh: number;
   hd: number;
+  /**
+   * Sloped geometry. The push-out solver is axis-aligned and would treat a ramp as a wall,
+   * so tagged ramps are skipped there and left entirely to Rapier — which handles slopes
+   * natively and is exactly what a character controller should rely on for them.
+   */
+  ramp?: boolean;
 };
 
 export type LevelBuildResult = {
@@ -106,35 +115,88 @@ function addDeck(
  * break the axis-aligned push-out solver, and stepped bricks are what a real brick staircase
  * looks like anyway. The 0.22 rise is under the capsule's rounded foot so it walks up unaided.
  */
-function addStair(
+/**
+ * A climbable ramp.
+ *
+ * Stepped stairs were the obvious brick look, but a dynamic capsule cannot walk up a 0.22m
+ * step: the contact on the riser sits below the capsule's rounded foot, so its normal points
+ * sideways and the solver pushes the player back instead of up. Simulating a step-up to force
+ * it produced a hover-oscillation instead of a climb.
+ *
+ * So the collider is one rotated box — Rapier walks those natively — and the visible steps are
+ * decorative strips laid on top of it. Brick staircase to look at, clean slope to walk on.
+ */
+function addRamp(
   group: THREE.Group,
   physics: PhysicsWorld,
   blocks: SolidBox[],
   mat: THREE.Material,
   spec: StairSpec,
 ): void {
-  const total = Math.max(0.2, spec.y1 - spec.y0);
-  const steps = Math.max(2, Math.round(total / 0.22));
-  const rise = total / steps;
-  const depth = 0.44;
+  const run = Math.max(1.2, spec.run ?? (spec.y1 - spec.y0) * 2.0);
+  const rise = spec.y1 - spec.y0;
+  const len = Math.hypot(run, rise);
+  const angle = Math.atan2(rise, run);
   const dx = spec.dir === 'e' ? 1 : spec.dir === 'w' ? -1 : 0;
   const dz = spec.dir === 's' ? 1 : spec.dir === 'n' ? -1 : 0;
+  const thick = 0.7;
 
-  for (let i = 0; i < steps; i++) {
-    // Tallest step sits against the deck and they descend away from it. Ramping the other
-    // way (short at the deck, tall at the far end) puts a wall in front of anyone walking up.
-    const h = spec.y1 - rise * i;
-    const cx = spec.x + dx * (depth * (i + 0.5));
-    const cz = spec.z + dz * (depth * (i + 0.5));
-    const w = dx !== 0 ? depth : spec.w;
-    const d = dz !== 0 ? depth : spec.w;
-    const step = new THREE.Mesh(new THREE.BoxGeometry(w, h, d), mat);
-    step.position.set(cx, h / 2, cz);
-    step.castShadow = true;
-    step.receiveShadow = true;
-    group.add(step);
-    physics.addStaticBox(w / 2, h / 2, d / 2, cx, h / 2, cz);
-    blocks.push({ x: cx, y: h / 2, z: cz, hw: w / 2, hh: h / 2, hd: d / 2 });
+  /*
+   * Sink the box by half its thickness along the surface normal, so the ramp's *top* face
+   * runs from (anchor, y0) to (end, y1). Without this the box's own thickness leaves a
+   * ~0.4m lip at the bottom of the run, and a capsule cannot climb that — the player walks
+   * up to the ramp and stops dead against it.
+   */
+  const sin = Math.sin(angle);
+  const cos = Math.cos(angle);
+  const midX = spec.x + dx * run / 2 + dx * (thick / 2) * sin;
+  const midZ = spec.z + dz * run / 2 + dz * (thick / 2) * sin;
+  const midY = spec.y0 + rise / 2 - (thick / 2) * cos;
+
+  const geom = dx !== 0
+    ? new THREE.BoxGeometry(len, thick, spec.w)
+    : new THREE.BoxGeometry(spec.w, thick, len);
+  const mesh = new THREE.Mesh(geom, mat);
+  mesh.position.set(midX, midY, midZ);
+  if (dx !== 0) mesh.rotation.z = angle * dx;
+  else mesh.rotation.x = -angle * dz;
+  mesh.castShadow = true;
+  mesh.receiveShadow = true;
+  group.add(mesh);
+
+  const rot = new THREE.Quaternion().setFromEuler(mesh.rotation);
+  const collider = physics.world.createCollider(
+    RAPIER.ColliderDesc.cuboid(
+      dx !== 0 ? len / 2 : spec.w / 2,
+      thick / 2,
+      dz !== 0 ? len / 2 : spec.w / 2,
+    ).setRotation(rot).setTranslation(midX, midY, midZ),
+  );
+  void collider;
+  blocks.push({ x: midX, y: midY, z: midZ,
+                hw: dx !== 0 ? len / 2 : spec.w / 2,
+                hh: thick / 2,
+                hd: dz !== 0 ? len / 2 : spec.w / 2,
+                ramp: true });
+
+  // Decorative treads: the staircase you see, with no collision of their own.
+  const treadCount = Math.max(3, Math.round(rise / 0.22));
+  for (let i = 0; i < treadCount; i++) {
+    const f = (i + 0.5) / treadCount;
+    const px = spec.x + dx * run * f;
+    const pz = spec.z + dz * run * f;
+    const py = spec.y0 + rise * f + 0.06;
+    const tread = new THREE.Mesh(
+      dx !== 0
+        ? new THREE.BoxGeometry(0.34, 0.1, spec.w)
+        : new THREE.BoxGeometry(spec.w, 0.1, 0.34),
+      mat,
+    );
+    tread.position.set(px, py, pz);
+    if (dx !== 0) tread.rotation.z = angle * dx;
+    else tread.rotation.x = -angle * dz;
+    tread.castShadow = true;
+    group.add(tread);
   }
 }
 
@@ -217,7 +279,7 @@ export function buildNeonArena(
   }
 
   for (const deck of opts.decks ?? []) addDeck(group, physics, blocks, buildingMat, deck);
-  for (const stair of opts.stairs ?? []) addStair(group, physics, blocks, buildingMat, stair);
+  for (const stair of opts.stairs ?? []) addRamp(group, physics, blocks, buildingMat, stair);
 
   const poles: Array<[number, number, THREE.Material]> = [
     [-8, -4, neonA],

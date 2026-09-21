@@ -64,6 +64,8 @@ export class AudioSystem {
   private noise: AudioBuffer | null = null;
   private unlocked = false;
   private muted = false;
+  private volume = 0.5;
+  private static readonly MAX = 0.5;
 
   private music: MusicSpec | null = null;
   private musicTimer: number | null = null;
@@ -115,8 +117,25 @@ export class AudioSystem {
 
   toggleMute(): boolean {
     this.muted = !this.muted;
-    if (this.master) this.master.gain.value = this.muted ? 0 : 0.5;
+    this.applyGain();
     return this.muted;
+  }
+
+  /** Master level, 0..1. */
+  get level(): number {
+    return this.volume / AudioSystem.MAX;
+  }
+
+  /** Steps the master volume. Returns the new 0..1 level. */
+  nudgeVolume(dir: 1 | -1): number {
+    this.volume = Math.max(0, Math.min(AudioSystem.MAX, this.volume + dir * 0.0625));
+    if (this.volume > 0) this.muted = false;
+    this.applyGain();
+    return this.level;
+  }
+
+  private applyGain(): void {
+    if (this.master) this.master.gain.value = this.muted ? 0 : this.volume;
   }
 
   private get live(): boolean {

@@ -284,38 +284,61 @@ export class CombatSystem {
      * accurately aimed shots did nothing while sloppy ones connected. Every hitscan weapon
      * in the game was affected.
      */
-    let best: BrickAgent | null = null;
-    for (const c of candidates) {
-      const p = c.t.body.translation();
-      const centre = new THREE.Vector3(p.x, p.y, p.z);
-      if (this.lineBlocked(world, from, centre, shooter, c.t.body.collider(0) ?? undefined)) continue;
-      best = c.t;
-      break;
-    }
-
+    /*
+     * Occlusion is resolved per body rather than against one global "wall distance".
+     * The old approach cast a single ray that did not exclude the targets, so a centred
+     * shot hit the victim's *own* capsule and then failed `proj < bestDist` — meaning
+     * accurately aimed shots did nothing while sloppy ones connected. Every hitscan weapon
+     * in the game was affected.
+     *
+     * Rails keep going: because candidates are already nearest-first, stopping at the first
+     * visible body is a one-liner. Running the same loop to the end is what makes the rail
+     * rifle actually pierce a line of enemies, which is the design spec's stated promise.
+     */
     const hitAgents: BrickAgent[] = [];
     let weakHit = false;
     let shieldBreak = false;
-    if (best) {
+    let reach = weapon.range;
+    const budget = pierce ? (weapon.pierceBodies ?? 1) : 1;
+    // Bodies this shot has already passed through stop being occluders — otherwise the first
+    // enemy in a line blocks the sight-line to the second and the rail silently stops at one.
+    const pierced = new Set<number>();
+    for (const c of candidates) {
+      if (c.proj > reach) break;
+      const p = c.t.body.translation();
+      const centre = new THREE.Vector3(p.x, p.y, p.z);
+      if (this.lineBlocked(world, from, centre, shooter, c.t.body.collider(0) ?? undefined, pierced)) continue;
+
       let amount = weapon.damage * damageMul;
       // A boss weak spot only counts when the ray actually passes through it.
-      const wp = best.weakPoint;
+      const wp = c.t.weakPoint;
       if (wp && this.rayDistanceTo(from, dir, wp.position) <= wp.radius) {
         amount *= wp.multiplier;
         weakHit = true;
       }
-      const broke = this.applyDamage(best, amount, weapon.pierceShield || pierce, from);
-      if (broke) shieldBreak = true;
-      hitAgents.push(best);
-      const p = best.body.translation();
+      if (this.applyDamage(c.t, amount, weapon.pierceShield || pierce, from)) shieldBreak = true;
+      hitAgents.push(c.t);
+      const h = c.t.body.collider(0);
+      if (h) pierced.add(h.handle);
       const hit = new THREE.Vector3(p.x, p.y, p.z);
       this.spawnTracer(from, hit, weapon.muzzleColor, pierce);
       this.vfx.spawn(hit, weakHit ? '#54f0a8' : weapon.muzzleColor, weakHit ? 2.2 : pierce ? 1.4 : 0.9, weakHit ? 0.4 : 0.28);
-    } else {
+
+      if (hitAgents.length >= budget) {
+        reach = c.proj;
+        break;
+      }
+    }
+
+    if (hitAgents.length === 0) {
       const wallDist = this.rayWallDistance(world, from, dir, weapon.range, shooter);
       const end = from.clone().addScaledVector(dir, wallDist);
       this.spawnTracer(from, end, weapon.muzzleColor, pierce);
       this.vfx.spawn(end, weapon.muzzleColor, 0.55, 0.18);
+    } else if (pierce) {
+      // Carry the rail's tracer out to whatever actually stopped it.
+      const stop = this.rayWallDistance(world, from, dir, weapon.range, shooter);
+      this.spawnTracer(from, from.clone().addScaledVector(dir, stop), weapon.muzzleColor, true);
     }
     return { hitAgents, weakHit, shieldBreak };
   }

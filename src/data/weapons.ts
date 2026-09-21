@@ -24,6 +24,8 @@ export type WeaponDef = {
   aoeRadius?: number;
   chargeTime?: number;
   chainCount?: number;
+  /** Max bodies a single shot passes through (rail only). */
+  pierceBodies?: number;
   muzzleColor: string;
   keyIndex: number;
 };
@@ -68,6 +70,9 @@ export const WEAPONS: WeaponDef[] = [
     range: 60,
     ammoMax: 12,
     pierceShield: true,
+    // The spec calls this a piercing weapon. Without an explicit budget it stopped dead
+    // on the first body, which is what made it feel like a reskinned pistol.
+    pierceBodies: 3,
     chargeTime: 0.55,
     muzzleColor: '#c77dff',
     keyIndex: 3,

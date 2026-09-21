@@ -92,10 +92,24 @@ export class CanvasHud {
   private storyAlpha = 0;
   private storyRect: Rect | null = null;
   private statusFlash: { text: string; until: number } | null = null;
+  private paused = false;
+  private volume: number | null = null;
 
   setLang(lang: HudLang): void {
     this.lang = lang;
   }
+
+  /** Full-screen pause treatment; the sim is frozen while this is up. */
+  setPaused(paused: boolean): void {
+    this.paused = paused;
+  }
+
+  /** Shows the volume bar for a few seconds. Pass 0..1. */
+  showVolume(value: number): void {
+    this.volume = value;
+    this.volumeUntil = performance.now() + 1600;
+  }
+  private volumeUntil = 0;
 
   /** Story card during level transitions; alpha 0..1 drives the fade. */
   setStory(lines: string[], alpha: number): void {
@@ -280,6 +294,8 @@ export class CanvasHud {
       this.drawStatus(L);
     }
     this.drawCrosshair();
+    if (this.paused) this.drawPaused(L);
+    if (this.volume !== null && performance.now() < this.volumeUntil) this.drawVolume(L);
     if (this.hint) this.drawHint(L);
     // A story card and a banner say the same kind of thing and share a band, so the
     // story wins while it is on screen.
@@ -609,6 +625,55 @@ export class CanvasHud {
       if (lines.every((l) => c.measureText(l).width <= maxW)) return px;
     }
     return sizes[sizes.length - 1]!;
+  }
+
+  /** Dimming scrim with a centred PAUSED plate. */
+  private drawPaused(L: Layout): void {
+    const c = this.ctx;
+    c.fillStyle = 'rgba(3,5,12,0.55)';
+    c.fillRect(0, 0, L.w, L.h);
+
+    const title = this.txt('PAUSED', '已暂停');
+    const sub = this.txt('Click to resume', '点击继续');
+    const px = Math.min(44, Math.max(22, L.w * 0.05));
+    c.textAlign = 'center';
+    c.font = fValue(px);
+    if ('letterSpacing' in c) (c as CanvasRenderingContext2D & { letterSpacing: string }).letterSpacing = '6px';
+    const tw = c.measureText(title).width;
+    const bw = Math.min(L.w - 40, tw + 90);
+    const bh = px + 62;
+    const x = (L.w - bw) / 2;
+    const y = (L.h - bh) / 2;
+    this.plate(x, y, bw, bh, 16, 'rgba(255,183,3,0.55)');
+    c.fillStyle = AMBER;
+    c.fillText(title, L.w / 2, y + px + 10);
+    if ('letterSpacing' in c) (c as CanvasRenderingContext2D & { letterSpacing: string }).letterSpacing = '0px';
+    c.font = fLabel(12);
+    c.fillStyle = INK;
+    c.fillText(sub, L.w / 2, y + px + 38);
+    c.textAlign = 'left';
+    this.statusRect = null;
+  }
+
+  /** Transient volume bar, bottom-left. */
+  private drawVolume(L: Layout): void {
+    const c = this.ctx;
+    const w = Math.min(220, L.w - L.margin * 2);
+    const h = 34;
+    const x = L.margin;
+    const y = L.h - h - L.margin;
+    this.plate(x, y, w, h, 10);
+    const label = this.txt('Volume', '音量');
+    const muted = (this.volume ?? 0) <= 0;
+    this.label(label, x + 12, y + 14, DIM, 9);
+    const bx = x + 12;
+    const by = y + 20;
+    const bw = w - 24;
+    c.fillStyle = 'rgba(234,246,255,0.12)';
+    c.fillRect(bx, by, bw, 6);
+    c.fillStyle = muted ? PINK : CYAN;
+    c.fillRect(bx, by, bw * (this.volume ?? 0), 6);
+    if (muted) this.label(this.txt('MUTED', '静音'), x + w - 12, y + 14, PINK, 9, 'right');
   }
 
   private drawHint(L: Layout): void {

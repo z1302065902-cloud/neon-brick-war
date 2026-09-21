@@ -98,6 +98,7 @@ export class Game {
   private lang: Lang = 'en';
   private storyTimer = 0;
   private storyLines: Localized[] = [];
+  private paused = false;
 
   constructor(private readonly canvas: HTMLCanvasElement) {
     this.renderer = createRenderer(canvas);
@@ -484,11 +485,26 @@ export class Game {
     if (this.input.consumeDebugToggle()) this.colliderDebug.toggle();
     if (this.input.consumeMute()) this.audio.toggleMute();
     if (this.input.consumeLang()) this.toggleLang();
+    const vol = this.input.consumeVolume();
+    if (vol) this.hud.showVolume(this.audio.nudgeVolume(vol));
     this.tickStory(delta);
     if (!this.ready || this.advancing) {
       this.publishDiagnostics();
       return;
     }
+
+    /*
+     * Pause. Unlocking the pointer (Esc) used to freeze only the enemies while the player
+     * kept walking and shooting — a half-state that read as a bug. Holding the whole
+     * simulation is both simpler and what the player expects from Esc.
+     */
+    this.paused = !this.input.isPointerLocked && !this.dead && !this.win;
+    if (this.paused) {
+      this.hud.setPaused(true);
+      this.publishDiagnostics();
+      return;
+    }
+    this.hud.setPaused(false);
 
     this.vfx.update(delta);
     this.debris.update(delta);

@@ -11,6 +11,7 @@ import { BrickAgent, CAPSULE_HALF, CAPSULE_RADIUS } from '../entities/BrickAgent
 import { BossAgent, type BossArchetype, type BossContext } from '../entities/BossAgent';
 import { FlyerAgent, type FlyerContext } from '../entities/FlyerAgent';
 import { ENEMY_PALETTE, PLAYER_PALETTE } from '../entities/BrickCharacter';
+import { CHASSIS, DEFAULT_CHASSIS, nextChassis, unlockedChassis, type ChassisId } from '../data/chassis';
 import { WorldPickup } from '../entities/WorldPickup';
 import type { LevelBuildResult } from '../levels/LevelFactory';
 import { createLevel as buildLevel, gradingFor } from '../levels/Maps';
@@ -108,6 +109,11 @@ export class Game {
   private storyTimer = 0;
   private storyLines: Localized[] = [];
   private paused = false;
+  /** Salvage from kills — the currency for chassis rebuilds. */
+  private salvage = 0;
+  private chassis: ChassisId = DEFAULT_CHASSIS;
+  private baseSpeed = BASE_SPEED;
+  private baseJump = JUMP_SPEED;
 
   constructor(private readonly canvas: HTMLCanvasElement) {
     this.renderer = createRenderer(canvas);
@@ -193,6 +199,7 @@ export class Game {
     );
     this.player.syncMesh();
     this.scene.add(this.player.group);
+    this.player.setGun('pulse', '#00e5ff', '#39414f');
     this.checkpoint.set(
       this.level.spawnPoint.x,
       this.player.standHeight,
@@ -395,6 +402,8 @@ export class Game {
       const airborne = a instanceof FlyerAgent;
       this.debris.burst(a.group, { force: airborne ? 7.5 : 6 });
       a.group.visible = false;
+      // Salvage is what makes the brick-rebuild a mechanic rather than an animation.
+      this.salvage += a.isBoss ? 5 : 1;
     };
     this.enemies.push(agent);
     this.scene.add(agent.group);
@@ -544,7 +553,8 @@ export class Game {
     if (this.input.consumeMute()) this.audio.toggleMute();
     if (this.input.consumeLang()) this.toggleLang();
     if (this.input.consumeFuse()) this.tryFuse();
-    if (this.input.consumeJump()) this.player.jump(JUMP_SPEED);
+    if (this.input.consumeChassis()) this.rebuildPlayer();
+    if (this.input.consumeJump()) this.player.jump(this.baseJump);
     const vol = this.input.consumeVolume();
     if (vol) this.hud.showVolume(this.audio.nudgeVolume(vol));
     this.tickStory(delta);
@@ -584,9 +594,9 @@ export class Game {
     this.placeCrosshair();
 
     const digit = this.input.consumeWeaponDigit();
-    if (digit) this.loadout.selectByKey(digit);
+    if (digit && this.loadout.selectByKey(digit)) this.equipGun(this.loadout.current.id);
     const cycle = this.input.consumeCycle();
-    if (cycle) this.loadout.cycle(cycle);
+    if (cycle) { this.loadout.cycle(cycle); this.equipGun(this.loadout.current.id); }
 
     if (this.input.consumeBuy()) this.openPurchasePage();
 
@@ -631,7 +641,7 @@ export class Game {
     this.player.updateGround();
     this.player.setWeaponColor(this.loadout.current.muzzleColor);
 
-    const speed = BASE_SPEED * (this.buffs.haste > 0 ? 1.45 : 1);
+    const speed = this.baseSpeed * (this.buffs.haste > 0 ? 1.45 : 1);
     this.input.readMovement(this.moveScratch);
     this.tps.forwardFlat(this.forward);
     this.tps.rightFlat(this.right);
@@ -967,6 +977,7 @@ export class Game {
     this.debris.burst(this.player.group, { inward: true });
 
     this.loadout.fuse(combo);
+    this.equipGun(combo.id);
     this.audio.fanfare();
     this.audio.explosion(1.1);
     this.vfx.spawn(new THREE.Vector3(at.x, at.y + 1, at.z), combo.muzzleColor, 4.2, 0.7);
@@ -981,6 +992,80 @@ export class Game {
       this.lang === 'zh' ? `已合成\n${name}\n${blurb}` : `WEAPONS FUSED\n${name}\n${blurb}`,
     );
     window.setTimeout(() => this.hud.setUnlockVisible(false), 2600);
+  }
+
+  /**
+   * Rebuild the player as the next chassis they have salvaged enough for.
+   *
+   * The figure is shattered, a new one is constructed with different proportions, and the
+   * bricks converge on it — the same beat as respawning, which is the point: in this world
+   * changing what you are is the same operation as coming back.
+   */
+  private rebuildPlayer(): void {
+    if (!this.ready || this.advancing || this.dead) return;
+    const earned = unlockedChassis(this.salvage);
+    const next = earned.find((c) => CHASSIS.findIndex((x) => x.id === c.id) > CHASSIS.findIndex((x) => x.id === this.chassis));
+    if (!next) {
+      const nxt = nextChassis(this.salvage);
+      this.hud.flashStatus(
+        nxt
+          ? tr(
+              [`NEED ${nxt.remaining} MORE SALVAGE FOR ${nxt.def.name[0].toUpperCase()}`,
+               `还需 ${nxt.remaining} 个废料才能重建成 ${nxt.def.name[1]}`],
+              this.lang,
+            )
+          : tr(['NO FURTHER CHASSIS', '已无可重建的机体'], this.lang),
+      );
+      return;
+    }
+
+    const t = this.player.body.translation();
+    const at = new THREE.Vector3(t.x, t.y, t.z);
+    this.debris.burst(this.player.group, { force: 5.5, spread: 0.7 });
+    this.player.group.visible = false;
+
+    // Swap the figure in place: same body, same position, new build and palette.
+    const old = this.player;
+    const rebuilt = new BrickAgent(
+      this.physics!,
+      next.palette,
+      new THREE.Vector3(t.x, t.y, t.z),
+      'player',
+      next.maxHp,
+      { build: next.build },
+    );
+    rebuilt.body.setTranslation({ x: t.x, y: t.y, z: t.z }, true);
+    rebuilt.syncMesh();
+    rebuilt.group.visible = false;
+    this.scene.add(rebuilt.group);
+    old.dispose(this.physics!);
+    this.scene.remove(old.group);
+    this.player = rebuilt;
+
+    this.chassis = next.id;
+    this.baseSpeed = BASE_SPEED * next.speed;
+    this.baseJump = JUMP_SPEED * next.jump;
+    this.equipGun(this.loadout.current.id);
+
+    this.debris.burst(rebuilt.group, { inward: true });
+    this.playerRevealAt = this.elapsed + 0.6;
+    this.audio.fanfare();
+    this.vfx.spawn(new THREE.Vector3(at.x, at.y + 1, at.z), next.palette.accent, 4, 0.7);
+    const label = this.lang === 'zh' ? next.name[1] : next.name[0];
+    this.hud.flashStatus(tr([`REBUILT: ${label}`, `已重建成：${label}`], this.lang));
+    this.hud.setUnlockVisible(
+      true,
+      this.lang === 'zh'
+        ? `机体重建\n${next.name[1]}\n${next.blurb[1]}`
+        : `CHASSIS REBUILT\n${next.name[0]}\n${next.blurb[0]}`,
+    );
+    window.setTimeout(() => this.hud.setUnlockVisible(false), 2600);
+  }
+
+  /** Give the player's figure the visible gun for a weapon. */
+  private equipGun(id: WeaponId): void {
+    const w = this.loadout.current;
+    this.player.setGun(id, w?.muzzleColor ?? '#00e5ff', '#39414f');
   }
 
   /** Language toggle — also rebuilds the level so objective labels follow. */

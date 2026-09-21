@@ -1,6 +1,8 @@
 import * as THREE from 'three';
 import RAPIER from '@dimforge/rapier3d-compat';
-import { createBrickFigure, type BrickPalette, type BrickRig } from './BrickCharacter';
+import { createBrickFigure, type BrickPalette, type BrickBuild, type BrickRig } from './BrickCharacter';
+import { createGunFigure } from './WeaponFigure';
+import type { WeaponId } from '../data/weapons';
 import type { PhysicsWorld } from '../physics/PhysicsWorld';
 
 const CAPSULE_HALF = 0.45;
@@ -12,6 +14,8 @@ export type AgentOpts = {
   scale?: number;
   /** Replaces the default brick figure — bosses bring their own silhouette. */
   figure?: THREE.Group;
+  /** Figure proportions, for chassis rebuilds. */
+  build?: BrickBuild;
   /** Collider sizing. Bosses are chunkier than grunts. */
   half?: number;
   radius?: number;
@@ -55,6 +59,9 @@ export class BrickAgent {
   private corpseFrozen = false;
   /** Walk-cycle phase; advances continuously so the gait never pops. */
   private animPhase = 0;
+  /** The current gun mesh, swapped when the weapon changes. */
+  private gunMesh: THREE.Group | null = null;
+  private gunHost: THREE.Object3D | null = null;
   /** True while a downward probe finds footing. Jumping needs this. */
   grounded = false;
   private readonly groundRay = new RAPIER.Ray({ x: 0, y: 0, z: 0 }, { x: 0, y: -1, z: 0 });
@@ -81,6 +88,7 @@ export class BrickAgent {
       createBrickFigure(palette, {
         boss: this.isBoss,
         shield: this.isShieldTrooper,
+        build: opts?.build,
       });
     const scale = opts?.scale ?? (this.isBoss ? 1.85 : 1);
     this.group.scale.setScalar(scale);
@@ -203,6 +211,29 @@ export class BrickAgent {
 
   setYaw(radians: number): void {
     this.group.rotation.y = radians;
+  }
+
+  /**
+   * Swap in the visible gun for a weapon. Reuses the mounting point inside the right arm so
+   * the new mesh inherits the arm's swing and pose without any extra rig work.
+   */
+  setGun(id: WeaponId, color: string, bodyColor: string): void {
+    const rig = this.group.userData.rig as BrickRig | undefined;
+    if (!rig) return;
+    const host = rig.armR;
+    if (this.gunHost !== host) {
+      if (this.gunMesh) this.gunMesh.removeFromParent();
+      this.gunHost = host;
+      this.gunMesh = null;
+    }
+    if (this.gunMesh) this.gunMesh.removeFromParent();
+    const mesh = createGunFigure(id, bodyColor, color);
+    const arml = rig.build?.armL ?? 1;
+    mesh.position.set(0.28, -0.23 * arml, -0.05);
+    host.add(mesh);
+    this.gunMesh = mesh;
+    // Keep userData.gunMat pointing at something colourable so existing callers still work.
+    this.group.userData.gunMat = null;
   }
 
   setWeaponColor(color: string): void {

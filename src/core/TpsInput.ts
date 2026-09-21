@@ -22,6 +22,7 @@ export class TpsInput {
   private volumeDir: 1 | -1 | 0 = 0;
   private jumpPressed = false;
   private fusePressed = false;
+  private chassisPressed = false;
 
   private readonly onKeyDown = (e: KeyboardEvent) => {
     // keydown auto-repeats while a key is held, so only the first event counts as a press.
@@ -32,6 +33,7 @@ export class TpsInput {
     if (firstPress && e.code === 'KeyM') this.mutePressed = true;
     if (firstPress && e.code === 'KeyL') this.langPressed = true;
     if (firstPress && e.code === 'KeyF') this.fusePressed = true;
+    if (firstPress && e.code === 'KeyG') this.chassisPressed = true;
     if (e.code === 'BracketRight' || e.code === 'Equal') this.volumeDir = 1;
     if (e.code === 'BracketLeft' || e.code === 'Minus') this.volumeDir = -1;
     if (e.code.startsWith('Digit')) {
@@ -169,6 +171,13 @@ export class TpsInput {
   consumeFuse(): boolean {
     const v = this.fusePressed;
     this.fusePressed = false;
+    return v;
+  }
+
+  /** G — rebuild the player as the next unlocked chassis. */
+  consumeChassis(): boolean {
+    const v = this.chassisPressed;
+    this.chassisPressed = false;
     return v;
   }
 

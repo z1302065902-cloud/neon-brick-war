@@ -866,6 +866,8 @@ export class Game {
   private toggleLang(): void {
     this.lang = this.lang === 'en' ? 'zh' : 'en';
     this.hud.setLang(this.lang);
+    // Keep the document language in step for screen readers and browser translation.
+    document.documentElement.lang = this.lang === 'zh' ? 'zh-CN' : 'en';
     this.hud.flashStatus(this.lang === 'zh' ? '语言：中文' : 'LANGUAGE: ENGLISH');
     if (this.level) {
       const chapter = LEVELS[this.mapIndex]!;

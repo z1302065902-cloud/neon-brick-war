@@ -15,7 +15,9 @@ export default defineConfig({
     strictPort: true,
   },
   build: {
-    sourcemap: true,
-    chunkSizeWarningLimit: 900,
+    // Sourcemaps are ~6 MB — larger than the entire game. They are worth having for local
+    // debugging and must never ship: the itch zip goes from 3.5 MB to 9.1 MB with them.
+    sourcemap: process.env.VITE_SOURCEMAP === '1',
+    chunkSizeWarningLimit: 4000,
   },
 });

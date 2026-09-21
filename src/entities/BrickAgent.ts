@@ -1,6 +1,6 @@
 import * as THREE from 'three';
 import RAPIER from '@dimforge/rapier3d-compat';
-import { createBrickFigure, type BrickPalette } from './BrickCharacter';
+import { createBrickFigure, type BrickPalette, type BrickRig } from './BrickCharacter';
 import type { PhysicsWorld } from '../physics/PhysicsWorld';
 
 const CAPSULE_HALF = 0.45;
@@ -53,6 +53,8 @@ export class BrickAgent {
   protected readonly capsuleHalf: number;
   protected readonly capsuleRadius: number;
   private corpseFrozen = false;
+  /** Walk-cycle phase; advances continuously so the gait never pops. */
+  private animPhase = 0;
 
   constructor(
     protected readonly physics: PhysicsWorld,
@@ -104,6 +106,41 @@ export class BrickAgent {
     const t = this.body.translation();
     // Capsule bottom = center - (half + radius); keep mesh feet on that plane.
     this.group.position.set(t.x, t.y - this.capsuleFoot, t.z);
+  }
+
+  /**
+   * Walk cycle, driven purely by the rigid body's horizontal speed.
+   *
+   * Stride frequency comes from how fast the agent is *actually* moving, so the feet never
+   * skate when it is slowed by a wall or a shove. Standing still settles into a slow breath
+   * rather than freezing mid-stride.
+   */
+  animate(delta: number): void {
+    const rig = this.group.userData.rig as BrickRig | undefined;
+    if (!rig) return;
+
+    const v = this.body.linvel();
+    const speed = Math.hypot(v.x, v.z);
+    const moving = this.alive && speed > 0.4;
+    const swing = moving ? Math.min(1, 0.3 + speed / 6) : 0;
+
+    this.animPhase += delta * (moving ? 5.2 + speed * 0.7 : 2.1);
+    const s = Math.sin(this.animPhase);
+    const c = Math.cos(this.animPhase);
+
+    rig.legL.rotation.x = s * 0.9 * swing;
+    rig.legR.rotation.x = -s * 0.9 * swing;
+    // The gun arm is braced on the weapon, so it swings far less than the free arm.
+    rig.armL.rotation.x = -s * 0.75 * swing;
+    rig.armR.rotation.x = s * 0.22 * swing;
+    rig.armL.rotation.z = swing * 0.12;
+
+    // Two bobs per stride, plus a slow breath when idle.
+    const idle = moving ? 0 : Math.sin(this.animPhase * 1.4) * 0.012;
+    rig.body.position.y = Math.abs(c) * 0.05 * swing + idle;
+    // A slight forward lean into the run.
+    rig.body.rotation.x = swing * 0.1;
+    rig.head.rotation.x = -swing * 0.05;
   }
 
   get capsuleFoot(): number {

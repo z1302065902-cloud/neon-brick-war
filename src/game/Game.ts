@@ -542,7 +542,7 @@ export class Game {
       }
       try {
         this.physics.step(delta);
-        this.syncAll();
+        this.syncAll(delta);
         this.updateCamera();
       } catch (err) {
         console.error('[win-idle]', err);
@@ -597,7 +597,7 @@ export class Game {
 
     this.collectPickups();
     this.physics!.step(delta);
-    this.syncAll();
+    this.syncAll(delta);
     this.updateCamera();
     this.checkOutposts();
     this.clampBounds();
@@ -944,10 +944,11 @@ export class Game {
     }
   }
 
-  private syncAll(): void {
+  private syncAll(delta: number): void {
     if (this.player?.alive !== undefined) {
       try {
         this.player.syncMesh();
+        this.player.animate(delta);
       } catch {
         /* body disposed mid-boot */
       }
@@ -955,6 +956,7 @@ export class Game {
     for (const e of this.enemies) {
       try {
         e.syncMesh();
+        e.animate(delta);
       } catch {
         /* ignore disposed */
       }

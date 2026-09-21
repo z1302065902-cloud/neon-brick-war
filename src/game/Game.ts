@@ -9,6 +9,7 @@ import { TpsInput } from '../core/TpsInput';
 import { PURCHASE_URL, UnlockStore } from '../commerce/UnlockStore';
 import { BrickAgent, CAPSULE_HALF, CAPSULE_RADIUS } from '../entities/BrickAgent';
 import { BossAgent, type BossArchetype, type BossContext } from '../entities/BossAgent';
+import { FlyerAgent, type FlyerContext } from '../entities/FlyerAgent';
 import { ENEMY_PALETTE, PLAYER_PALETTE } from '../entities/BrickCharacter';
 import { WorldPickup } from '../entities/WorldPickup';
 import type { LevelBuildResult } from '../levels/LevelFactory';
@@ -97,6 +98,7 @@ export class Game {
   private boss: BossAgent | null = null;
   private readonly pendingAdds: BrickAgent[] = [];
   private readonly climaxAt = new THREE.Vector3();
+  private readonly flyerFeet = new THREE.Vector3();
   private climaxLeft = 0;
   private climaxTimer = 0;
   private climaxStarted = false;
@@ -344,7 +346,9 @@ export class Game {
       return;
     }
 
-    const count = 3 + index + (this.mapIndex - 1);
+    // Level index is zero-based, so the old `+ (mapIndex - 1)` scaling made level 1 spawn
+    // one enemy short of the intended three.
+    const count = 3 + index + Math.floor(this.mapIndex / 2);
     for (let i = 0; i < count; i++) {
       const ang = (i / count) * Math.PI * 2;
       const pos = new THREE.Vector3(
@@ -359,6 +363,27 @@ export class Game {
         }),
       );
     }
+
+    /*
+     * Air cover. Flyers orbit above the fight instead of walking into it, so they change the
+     * shape of the encounter rather than adding another body to the same shooting gallery.
+     * Count climbs with the level and they only appear from the second wave onward, which
+     * keeps the opening of a level about the ground push.
+     */
+    const flyers = index === 0 ? 0 : Math.min(3, Math.floor(this.mapIndex / 3) + 1);
+    for (let i = 0; i < flyers; i++) {
+      const ang = (i / Math.max(1, flyers)) * Math.PI * 2 + 0.7;
+      this.addEnemy(
+        new FlyerAgent(
+          phys,
+          new THREE.Vector3(
+            op.center.x + Math.cos(ang) * 7,
+            4.2,
+            op.center.z + Math.sin(ang) * 7,
+          ),
+        ),
+      );
+    }
   }
 
   /** Every hostile goes through here so the brick-shatter hook is never missed. */
@@ -367,7 +392,8 @@ export class Game {
       // The bricks *are* the corpse — leaving the intact figure visible as well would
       // double-render the death. Bosses burst later, at the end of their explosion climax.
       if (a.isBoss) return;
-      this.debris.burst(a.group, { force: 6 });
+      const airborne = a instanceof FlyerAgent;
+      this.debris.burst(a.group, { force: airborne ? 7.5 : 6 });
       a.group.visible = false;
     };
     this.enemies.push(agent);
@@ -758,7 +784,7 @@ export class Game {
     if (!this.input.isPointerLocked) {
       for (const e of this.enemies) {
         if (!e.alive) continue;
-        if (e instanceof BossAgent) e.parkPosition();
+        if (e instanceof BossAgent || e instanceof FlyerAgent) e.parkPosition();
         else e.applyMoveVelocity(0, 0, ENEMY_SPEED);
       }
       return;
@@ -772,6 +798,10 @@ export class Game {
       if (!e.alive) continue;
       if (e instanceof BossAgent) {
         e.update(delta, ctx);
+        continue;
+      }
+      if (e instanceof FlyerAgent) {
+        e.update(delta, this.flyerContext());
         continue;
       }
       e.updateGround();
@@ -800,6 +830,17 @@ export class Game {
       for (const add of this.pendingAdds) this.addEnemy(add);
       this.pendingAdds.length = 0;
     }
+  }
+
+  private flyerContext(): FlyerContext {
+    const t = this.player.body.translation();
+    this.flyerFeet.set(t.x, 0, t.z);
+    return {
+      playerFeet: this.flyerFeet,
+      vfx: this.vfx,
+      audio: this.audio,
+      damagePlayer: (amount) => this.damagePlayer(amount),
+    };
   }
 
   private bossContext(): BossContext {

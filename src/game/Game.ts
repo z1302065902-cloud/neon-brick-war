@@ -543,6 +543,7 @@ export class Game {
     if (this.input.consumeDebugToggle()) this.colliderDebug.toggle();
     if (this.input.consumeMute()) this.audio.toggleMute();
     if (this.input.consumeLang()) this.toggleLang();
+    if (this.input.consumeFuse()) this.tryFuse();
     if (this.input.consumeJump()) this.player.jump(JUMP_SPEED);
     const vol = this.input.consumeVolume();
     if (vol) this.hud.showVolume(this.audio.nudgeVolume(vol));
@@ -936,6 +937,50 @@ export class Game {
       this.storyLines.map((l) => tr(l, this.lang)),
       this.storyLines.length ? (this.storyTimer > 3 ? 1 : this.storyTimer / 3) : 0,
     );
+  }
+
+  /**
+   * Break two weapons down and rebuild them as one.
+   *
+   * The visual is the point: the held gun bursts into bricks, the bricks stream across to
+   * the new weapon's position, and the fused gun appears where they land. Reusing the same
+   * debris system as the character deaths is what makes fusion read as part of the same
+   * brick world instead of a menu action.
+   */
+  private tryFuse(): void {
+    if (!this.ready || this.advancing || this.dead) return;
+    const combo = this.loadout.fusablePair();
+    if (!combo) {
+      this.hud.flashStatus(
+        tr(['NO FUSION RECIPE FOR YOUR CURRENT GUNS', '当前两把武器没有合成配方'], this.lang),
+      );
+      return;
+    }
+
+    const pt = this.player.body.translation();
+    const at = new THREE.Vector3(pt.x, pt.y - this.player.standHeight, pt.z);
+
+    // The parts shatter where the player stands, then the result reassembles.
+    this.debris.burst(this.player.group, { force: 5.5, spread: 0.7 });
+    this.player.group.visible = false;
+    this.playerRevealAt = this.elapsed + 0.6;
+    this.debris.burst(this.player.group, { inward: true });
+
+    this.loadout.fuse(combo);
+    this.audio.fanfare();
+    this.audio.explosion(1.1);
+    this.vfx.spawn(new THREE.Vector3(at.x, at.y + 1, at.z), combo.muzzleColor, 4.2, 0.7);
+
+    const name = this.lang === 'zh' ? combo.nameZh : combo.name;
+    const blurb = tr(combo.blurb, this.lang);
+    this.hud.flashStatus(
+      tr([`FUSED: ${name}`, `已合成：${name}`], this.lang),
+    );
+    this.hud.setUnlockVisible(
+      true,
+      this.lang === 'zh' ? `已合成\n${name}\n${blurb}` : `WEAPONS FUSED\n${name}\n${blurb}`,
+    );
+    window.setTimeout(() => this.hud.setUnlockVisible(false), 2600);
   }
 
   /** Language toggle — also rebuilds the level so objective labels follow. */

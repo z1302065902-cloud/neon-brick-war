@@ -4,7 +4,11 @@ export type WeaponId =
   | 'rail'
   | 'grenade'
   | 'arc'
-  | 'plasma';
+  | 'plasma'
+  /** Fused weapons — never listed in WEAPONS; registered by the loadout when built. */
+  | 'needler'
+  | 'flak'
+  | 'storm';
 
 export type FireMode = 'hitscan' | 'scatter' | 'rail' | 'grenade' | 'arc' | 'plasma';
 

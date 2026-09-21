@@ -21,6 +21,7 @@ export class TpsInput {
   private langPressed = false;
   private volumeDir: 1 | -1 | 0 = 0;
   private jumpPressed = false;
+  private fusePressed = false;
 
   private readonly onKeyDown = (e: KeyboardEvent) => {
     // keydown auto-repeats while a key is held, so only the first event counts as a press.
@@ -30,6 +31,7 @@ export class TpsInput {
     if (firstPress && e.code === 'F3') this.debugTogglePressed = true;
     if (firstPress && e.code === 'KeyM') this.mutePressed = true;
     if (firstPress && e.code === 'KeyL') this.langPressed = true;
+    if (firstPress && e.code === 'KeyF') this.fusePressed = true;
     if (e.code === 'BracketRight' || e.code === 'Equal') this.volumeDir = 1;
     if (e.code === 'BracketLeft' || e.code === 'Minus') this.volumeDir = -1;
     if (e.code.startsWith('Digit')) {
@@ -160,6 +162,13 @@ export class TpsInput {
   consumeRestart(): boolean {
     const v = this.restartPressed;
     this.restartPressed = false;
+    return v;
+  }
+
+  /** F — fuse the two held weapons, if they have a recipe. */
+  consumeFuse(): boolean {
+    const v = this.fusePressed;
+    this.fusePressed = false;
     return v;
   }
 

@@ -1,6 +1,7 @@
 import * as THREE from 'three';
 import RAPIER from '@dimforge/rapier3d-compat';
 import type { PhysicsWorld } from '../physics/PhysicsWorld';
+import { createStructure, type StructureId, type StructurePalette } from '../entities/StructureFigure';
 
 export type Outpost = {
   id: 'A' | 'B' | 'C';
@@ -213,7 +214,9 @@ export function buildNeonArena(
     spawn: THREE.Vector3;
     buildings: Array<[number, number, number, number, number]>;
     decks?: DeckSpec[];
-    stairs?: StairSpec[];
+    ramps?: StairSpec[];
+    /** Which brick family this level's buildings are made of. */
+    structures?: StructureId;
     halfExtent?: number;
   },
 ): LevelBuildResult {
@@ -274,12 +277,46 @@ export function buildNeonArena(
   addBuilding(group, physics, -half, 0, 1.2, wallH, half * 2, buildingMat, blocks);
   addBuilding(group, physics, half, 0, 1.2, wallH, half * 2, buildingMat, blocks);
 
+  /*
+   * Buildings are drawn from the level's own brick family rather than a shared box.
+   * Each structure brings its own colliders in local space, so the footprint follows the
+   * silhouette — a mushroom is solid at the stem and open under the cap, which a single
+   * wrapping AABB could never express.
+   */
+  const family = opts.structures;
+  const structPalette: StructurePalette = {
+    body: opts.buildingColor,
+    trim: opts.neonB,
+    accent: opts.neonA,
+  };
   for (const [x, z, w, h, d] of opts.buildings) {
-    addBuilding(group, physics, x, z, w, h, d, buildingMat, blocks);
+    if (!family) {
+      addBuilding(group, physics, x, z, w, h, d, buildingMat, blocks);
+      continue;
+    }
+    const scale = Math.max(0.45, Math.min(1.35, (w + d) / 9));
+    const built = createStructure(family, structPalette, scale);
+    built.group.position.set(x, 0, z);
+    built.group.rotation.y = ((x * 7 + z * 13) % 4) * (Math.PI / 2);
+    group.add(built.group);
+    // Rotate the colliders to match the group's yaw, then lift into world space.
+    const yaw = built.group.rotation.y;
+    const cos = Math.cos(yaw);
+    const sin = Math.sin(yaw);
+    for (const b of built.boxes) {
+      const wx = x + b.x * cos + b.z * sin;
+      const wz = z - b.x * sin + b.z * cos;
+      // A rotated box is no longer axis-aligned, so wrap it in the smaller of its two
+      // possible AABBs — a slight shrink, but the push-out solver stays exact.
+      const hw = Math.abs(b.hw * cos) + Math.abs(b.hd * sin);
+      const hd = Math.abs(b.hw * sin) + Math.abs(b.hd * cos);
+      physics.addStaticBox(hw, b.hh, hd, wx, b.y, wz);
+      blocks.push({ x: wx, y: b.y, z: wz, hw, hh: b.hh, hd });
+    }
   }
 
   for (const deck of opts.decks ?? []) addDeck(group, physics, blocks, buildingMat, deck);
-  for (const stair of opts.stairs ?? []) addRamp(group, physics, blocks, buildingMat, stair);
+  for (const ramp of opts.ramps ?? []) addRamp(group, physics, blocks, buildingMat, ramp);
 
   const poles: Array<[number, number, THREE.Material]> = [
     [-8, -4, neonA],

@@ -213,7 +213,8 @@ export function createLevel(physics: PhysicsWorld, index: number, lang: Lang): L
     spawn,
     buildings: buildingsFor(index, outposts, decks, stairs),
     decks,
-    stairs,
+    ramps: stairs,
+    structures: LEVELS[index]!.structures,
   });
 
   // Background city, in the chapter's own colours so the horizon matches the arena.

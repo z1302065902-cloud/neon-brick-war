@@ -6,6 +6,8 @@
  * should hard-code display text.
  */
 
+import type { StructureId } from '../entities/StructureFigure';
+
 export type Lang = 'en' | 'zh';
 
 /** A display string: English first, Chinese second. */
@@ -29,6 +31,8 @@ export type LevelChapter = {
   neonB: string;
   sky: string;
   boss: Localized;
+  /** Which brick family the buildings in this level are made from. */
+  structures: StructureId;
 };
 
 export const CAMPAIGN_TITLE: Localized = ['NEON BRICK WAR', '霓虹积木战争'];
@@ -52,6 +56,7 @@ export const LEVELS: readonly LevelChapter[] = [
     neonB: '#ff2d6a',
     sky: '#6eb6ea',
     boss: ['Armored Loader', '装甲装卸机'],
+    structures: 'mushroom',
   },
   {
     name: ['Warehouse Row', '仓库区'],
@@ -71,6 +76,7 @@ export const LEVELS: readonly LevelChapter[] = [
     neonB: '#ffb703',
     sky: '#5ea8d8',
     boss: ['Cargo Hauler', '重型搬运机'],
+    structures: 'fruit',
   },
   {
     name: ['Skybridge', '天桥'],
@@ -90,6 +96,7 @@ export const LEVELS: readonly LevelChapter[] = [
     neonB: '#54f0a8',
     sky: '#d7c2ff',
     boss: ['Drone Carrier', '无人机母舰'],
+    structures: 'gear',
   },
   {
     name: ['Ad Tower', '广告塔'],
@@ -109,6 +116,7 @@ export const LEVELS: readonly LevelChapter[] = [
     neonB: '#ff9f43',
     sky: '#c3aaff',
     boss: ['Signal Warden', '信号典狱长'],
+    structures: 'antenna',
   },
   {
     name: ['Alley Maze', '巷道迷阵'],
@@ -128,6 +136,7 @@ export const LEVELS: readonly LevelChapter[] = [
     neonB: '#ff2d6a',
     sky: '#9d94c9',
     boss: ['Rig Welder', '轨道焊接机'],
+    structures: 'crate',
   },
   {
     name: ['Foundry', '铸造厂'],
@@ -147,6 +156,7 @@ export const LEVELS: readonly LevelChapter[] = [
     neonB: '#ff2d6a',
     sky: '#e8b878',
     boss: ['Slag Behemoth', '熔渣巨像'],
+    structures: 'pipe',
   },
   {
     name: ['Data Spire', '数据尖塔'],
@@ -166,6 +176,7 @@ export const LEVELS: readonly LevelChapter[] = [
     neonB: '#c77dff',
     sky: '#5f9fc4',
     boss: ['Archive Sentinel', '档案哨卫'],
+    structures: 'dome',
   },
   {
     name: ['Coolant Hall', '冷却厅'],
@@ -185,6 +196,7 @@ export const LEVELS: readonly LevelChapter[] = [
     neonB: '#2de2ff',
     sky: '#6fc0c8',
     boss: ['Coolant Wyrm', '冷却长蛇'],
+    structures: 'crystal',
   },
   {
     name: ['Perimeter Wall', '外围高墙'],
@@ -204,6 +216,7 @@ export const LEVELS: readonly LevelChapter[] = [
     neonB: '#ffb703',
     sky: '#e58a9c',
     boss: ['Wall Colossus', '城墙巨像'],
+    structures: 'billboard',
   },
   {
     name: ['Core Reactor', '核心反应堆'],
@@ -223,6 +236,7 @@ export const LEVELS: readonly LevelChapter[] = [
     neonB: '#c77dff',
     sky: '#ffb7c8',
     boss: ['Core Guardian', '核心守卫'],
+    structures: 'scaffold',
   },
 ];
 

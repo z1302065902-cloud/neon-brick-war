@@ -515,6 +515,40 @@ export class Game {
     }
   }
 
+  /**
+   * Push a point out of any solid it lands inside.
+   *
+   * Pickup positions are fixed constants, but the arena around them is generated per level —
+   * mushroom stems, crate stacks and deck legs all ended up walling pickups in, which made
+   * them permanently uncollectable. Same axis-aligned push-out the player uses.
+   */
+  private freeSpot(x: number, z: number): { x: number; z: number } {
+    const r = 0.95;
+    const limit = Math.max(2, this.level.halfExtent - 2);
+    let px = x;
+    let pz = z;
+    for (let pass = 0; pass < 24; pass++) {
+      let moved = false;
+      for (const b of this.level.blocks) {
+        // Ramps are walkable and floating slabs are above head height; neither traps a pickup.
+        if (b.ramp || b.y - b.hh > 1.6) continue;
+        const dx = px - b.x;
+        const dz = pz - b.z;
+        const ox = b.hw + r - Math.abs(dx);
+        const oz = b.hd + r - Math.abs(dz);
+        if (ox <= 0 || oz <= 0) continue;
+        if (ox < oz) px += dx >= 0 ? ox : -ox;
+        else pz += dz >= 0 ? oz : -oz;
+        moved = true;
+      }
+      if (!moved) break;
+    }
+    return {
+      x: THREE.MathUtils.clamp(px, -limit, limit),
+      z: THREE.MathUtils.clamp(pz, -limit, limit),
+    };
+  }
+
   private spawnPickupsForMap(): void {
     const ids: PickupId[] = [
       'medkit',
@@ -537,7 +571,9 @@ export class Game {
       new THREE.Vector3(12, 0, 10),
     ];
     ids.forEach((id, i) => {
-      const p = new WorldPickup(id, spots[i]!.clone());
+      const spot = spots[i]!;
+      const free = this.freeSpot(spot.x, spot.z);
+      const p = new WorldPickup(id, new THREE.Vector3(free.x, spot.y, free.z));
       this.pickups.push(p);
       this.scene.add(p.group);
     });

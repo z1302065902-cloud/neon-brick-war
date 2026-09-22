@@ -1,6 +1,6 @@
 import * as THREE from 'three';
 import RAPIER from '@dimforge/rapier3d-compat';
-import { createBrickFigure, type BrickPalette, type BrickBuild, type BrickRig } from './BrickCharacter';
+import { createBrickFigure, type BrickPalette, type BrickBuild, type BrickRig, type BrickTrait } from './BrickCharacter';
 import { createGunFigure } from './WeaponFigure';
 import type { WeaponId } from '../data/weapons';
 import type { PhysicsWorld } from '../physics/PhysicsWorld';
@@ -16,6 +16,8 @@ export type AgentOpts = {
   figure?: THREE.Group;
   /** Figure proportions, for chassis rebuilds. */
   build?: BrickBuild;
+  /** Distinguishing appendage. */
+  trait?: BrickTrait;
   /** Collider sizing. Bosses are chunkier than grunts. */
   half?: number;
   radius?: number;
@@ -89,6 +91,7 @@ export class BrickAgent {
         boss: this.isBoss,
         shield: this.isShieldTrooper,
         build: opts?.build,
+        trait: opts?.trait,
       });
     const scale = opts?.scale ?? (this.isBoss ? 1.85 : 1);
     this.group.scale.setScalar(scale);

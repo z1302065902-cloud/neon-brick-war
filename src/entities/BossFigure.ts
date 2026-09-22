@@ -1,6 +1,28 @@
 import * as THREE from 'three';
 
-export type BossArchetype = 'loader' | 'carrier' | 'guardian';
+/**
+ * Ten boss silhouettes.
+ *
+ * Behaviour reuses three rigs — a ground charger, an air kiter, and a stationary guard —
+ * but every boss gets its own body, so no two fights look alike. Ten state machines would
+ * be ten times the surface area for the same gameplay; ten *looks* on three rigs is the
+ * difference the player actually sees.
+ */
+export type BossArchetype =
+  | 'loader' | 'carrier' | 'guardian'
+  | 'hauler' | 'warden' | 'welder'
+  | 'behemoth' | 'sentinel' | 'wyrm' | 'colossus';
+
+/** Which of the three behaviour rigs an archetype drives. */
+export const ARCHETYPE_KIND: Record<BossArchetype, 'loader' | 'carrier' | 'guardian'> = {
+  loader: 'loader', hauler: 'loader', welder: 'loader', behemoth: 'loader', colossus: 'loader',
+  carrier: 'carrier', warden: 'carrier', wyrm: 'carrier',
+  guardian: 'guardian', sentinel: 'guardian',
+};
+
+/** Which silhouette builder to run for an archetype. */
+type FigureShape = 'loader' | 'carrier' | 'guardian' | 'hauler' | 'warden'
+  | 'welder' | 'behemoth' | 'sentinel' | 'wyrm' | 'colossus';
 
 export type BossFigure = {
   root: THREE.Group;
@@ -26,7 +48,7 @@ const glow = (color: string, intensity = 0.8) =>
   });
 
 /** Tall enough that the collider below has something to wrap. Feet sit at y = 0. */
-export function createBossFigure(kind: BossArchetype): BossFigure {
+export function createBossFigure(kind: FigureShape): BossFigure {
   const root = new THREE.Group();
   root.name = 'BossFigure';
   const armour: THREE.MeshStandardMaterial[] = [];
@@ -39,7 +61,7 @@ export function createBossFigure(kind: BossArchetype): BossFigure {
     return mesh;
   };
 
-  if (kind === 'loader') {
+  if (kind === 'loader' || kind === 'behemoth' || kind === 'colossus' || kind === 'hauler' || kind === 'welder') {
     // 装甲装卸机 — squat tracked hauler, front plate is the armour, back vent is the seam.
     const trackMat = plastic('#20262f', 0.55, 0.4);
     for (const side of [-1, 1]) {
@@ -99,7 +121,7 @@ export function createBossFigure(kind: BossArchetype): BossFigure {
     return { root, armour, core, coreMat, spin };
   }
 
-  if (kind === 'carrier') {
+  if (kind === 'carrier' || kind === 'warden' || kind === 'wyrm') {
     // 无人机母舰 — hovering hexagonal hull, rotors on top, core slung underneath.
     const hull = new THREE.Mesh(new THREE.CylinderGeometry(1.15, 1.0, 0.52, 6), plastic('#7b3fa0', 0.32, 0.35));
     hull.position.y = 1.32;
@@ -142,7 +164,7 @@ export function createBossFigure(kind: BossArchetype): BossFigure {
     return { root, armour, core, coreMat, spin };
   }
 
-  // guardian — 核心守卫：an obelisk holding a shielded floating core.
+  // guardian / sentinel — an obelisk holding a shielded floating core.
   const base = new THREE.Mesh(new THREE.BoxGeometry(2.2, 0.44, 2.2), plastic('#2b1b3a', 0.45, 0.4));
   base.position.y = 0.22;
   add(base);

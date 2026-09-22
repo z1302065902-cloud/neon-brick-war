@@ -1,6 +1,6 @@
 import * as THREE from 'three';
 import { BrickAgent } from './BrickAgent';
-import { createBossFigure, type BossArchetype, type BossFigure } from './BossFigure';
+import { ARCHETYPE_KIND, createBossFigure, type BossArchetype, type BossFigure } from './BossFigure';
 import type { PhysicsWorld } from '../physics/PhysicsWorld';
 import type { ExplosionVfx } from '../systems/ExplosionVfx';
 import type { AudioSystem } from '../systems/AudioSystem';
@@ -66,7 +66,51 @@ const SPECS: Record<BossArchetype, Spec> = {
     weakMultiplier: 3.0,
     hover: 0,
   },
+  // ---- levels 2, 5, 9: ground chargers, each heavier than the last ----
+  hauler: {
+    name: 'Cargo Hauler',
+    hp: 400, speed: 2.6, half: 0.55, radius: 0.5,
+    interval: [3.2, 2.2], weakRadius: 0.66, weakMultiplier: 2.4, hover: 0,
+  },
+  welder: {
+    name: 'Rig Welder',
+    hp: 520, speed: 2.1, half: 0.55, radius: 0.52,
+    interval: [3.0, 2.0], weakRadius: 0.7, weakMultiplier: 2.8, hover: 0,
+  },
+  behemoth: {
+    name: 'Slag Behemoth',
+    hp: 760, speed: 1.7, half: 0.62, radius: 0.62,
+    interval: [3.6, 2.4], weakRadius: 0.8, weakMultiplier: 2.6, hover: 0,
+  },
+  colossus: {
+    name: 'Wall Colossus',
+    hp: 980, speed: 1.5, half: 0.68, radius: 0.7,
+    interval: [3.4, 2.2], weakRadius: 0.88, weakMultiplier: 3.0, hover: 0,
+  },
+  // ---- levels 3, 7: air kiters ----
+  warden: {
+    name: 'Signal Warden',
+    hp: 440, speed: 3.4, half: 0.62, radius: 0.52,
+    interval: [2.2, 1.5], weakRadius: 0.62, weakMultiplier: 2.3, hover: 1.4,
+  },
+  wyrm: {
+    name: 'Coolant Wyrm',
+    hp: 620, speed: 3.6, half: 0.62, radius: 0.54,
+    interval: [2.0, 1.3], weakRadius: 0.66, weakMultiplier: 2.4, hover: 1.8,
+  },
+  // ---- level 6: a second guard-type ----
+  sentinel: {
+    name: 'Archive Sentinel',
+    hp: 580, speed: 1.6, half: 1.05, radius: 0.58,
+    interval: [5.0, 2.8], weakRadius: 0.76, weakMultiplier: 3.1, hover: 0,
+  },
 };
+
+/** Level index -> boss. Every level gets its own. */
+export const LEVEL_BOSS: BossArchetype[] = [
+  'loader', 'hauler', 'carrier', 'warden', 'welder',
+  'sentinel', 'wyrm', 'behemoth', 'colossus', 'guardian',
+];
 
 /** Phase-2 armour heats up to this colour. */
 const RAGE = new THREE.Color('#ff5a00');
@@ -83,6 +127,8 @@ const BASE_ARMOUR = new THREE.Color('#3d2752');
  */
 export class BossAgent extends BrickAgent {
   readonly archetype: BossArchetype;
+  /** Behaviour rig: the archetype's silhouette does not change how it fights. */
+  readonly kind: 'loader' | 'carrier' | 'guardian';
   readonly displayName: string;
   phase: 1 | 2 = 1;
   state: BossState = 'idle';
@@ -103,7 +149,9 @@ export class BossAgent extends BrickAgent {
 
   constructor(physics: PhysicsWorld, archetype: BossArchetype, position: THREE.Vector3) {
     const spec = SPECS[archetype];
+    // Silhouette is the archetype; behaviour comes from which of the three rigs it maps to.
     const figure = createBossFigure(archetype);
+    const kind = ARCHETYPE_KIND[archetype];
     super(physics, {
       skin: '#c4a882', torso: '#ffb703', legs: '#1b1b2f', accent: '#fb8500',
     }, position, 'enemy', spec.hp, {
@@ -115,12 +163,13 @@ export class BossAgent extends BrickAgent {
       density: 5,
     });
     this.archetype = archetype;
+    this.kind = kind;
     this.displayName = spec.name;
     this.spec = spec;
     this.figure = figure;
     this.coreLocal = figure.core.position.clone();
     // The loader starts fully armoured; the guardian starts closed.
-    this.coreOpenTimer = archetype === 'guardian' ? 0 : Infinity;
+    this.coreOpenTimer = kind === 'guardian' ? 0 : Infinity;
     this.syncWeakPoint();
   }
 
@@ -131,7 +180,7 @@ export class BossAgent extends BrickAgent {
    * forces the player to circle behind it instead of standing still and trading.
    */
   damageScaleFrom(from: THREE.Vector3): number {
-    if (this.archetype !== 'loader') return 1;
+    if (this.kind !== 'loader') return 1;
     const t = this.body.translation();
     this.tmp.set(from.x - t.x, 0, from.z - t.z);
     if (this.tmp.lengthSq() < 1e-6) return 1;
@@ -174,7 +223,7 @@ export class BossAgent extends BrickAgent {
     this.updateCore(delta);
     this.syncWeakPoint();
 
-    switch (this.archetype) {
+    switch (this.kind) {
       case 'loader':
         this.runLoader(delta, dist, dx, dz, ctx);
         break;
@@ -220,7 +269,7 @@ export class BossAgent extends BrickAgent {
 
   /** The guardian only opens its core for a window after each pulse. */
   private updateCore(delta: number): void {
-    if (this.archetype !== 'guardian') return;
+    if (this.kind !== 'guardian') return;
     if (this.coreOpenTimer > 0) this.coreOpenTimer = Math.max(0, this.coreOpenTimer - delta);
     const open = this.coreOpenTimer > 0;
     this.figure.core.visible = true;

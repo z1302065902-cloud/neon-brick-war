@@ -8,10 +8,11 @@ import { createRenderer, resizeRenderer } from '../core/Renderer';
 import { TpsInput } from '../core/TpsInput';
 import { PURCHASE_URL, UnlockStore } from '../commerce/UnlockStore';
 import { BrickAgent, CAPSULE_HALF, CAPSULE_RADIUS } from '../entities/BrickAgent';
-import { BossAgent, type BossArchetype, type BossContext } from '../entities/BossAgent';
+import { BossAgent, LEVEL_BOSS, type BossArchetype, type BossContext } from '../entities/BossAgent';
 import { FlyerAgent, type FlyerContext } from '../entities/FlyerAgent';
 import { ENEMY_PALETTE, PLAYER_PALETTE } from '../entities/BrickCharacter';
 import { CHASSIS, DEFAULT_CHASSIS, nextChassis, unlockedChassis, type ChassisId } from '../data/chassis';
+import { enemyForLevel } from '../data/enemies';
 import { WorldPickup } from '../entities/WorldPickup';
 import type { LevelBuildResult } from '../levels/LevelFactory';
 import { createLevel as buildLevel, gradingFor } from '../levels/Maps';
@@ -119,6 +120,8 @@ export class Game {
    * the game never runs out of content — the campaign is a ramp, not a wall.
    */
   private cycle = 0;
+  /** Walk-speed multiplier of the level's enemy type. */
+  private enemySpeedScale = 1;
 
   constructor(private readonly canvas: HTMLCanvasElement) {
     this.renderer = createRenderer(canvas);
@@ -384,13 +387,18 @@ export class Game {
         1.0,
         op.center.z + Math.sin(ang) * (op.radius * 0.65),
       );
-      const shield = i % 3 === 2;
+      // Every level fields its own enemy silhouette, not a recoloured copy of level 1.
+      const def = enemyForLevel(this.mapIndex);
+      const shield = def.trait === 'shielded' && i % 3 === 2;
+      const hp = Math.round(55 * def.hpScale * this.difficulty * (shield ? 1.25 : 1));
       this.addEnemy(
-        new BrickAgent(phys, ENEMY_PALETTE, pos, 'enemy',
-          Math.round((shield ? 70 : 55) * this.difficulty), {
+        new BrickAgent(phys, def.palette, pos, 'enemy', hp, {
           shieldTrooper: shield,
+          build: def.build,
+          trait: def.trait,
         }),
       );
+      this.enemySpeedScale = def.speedScale;
     }
 
     /*
@@ -438,8 +446,8 @@ export class Game {
     if (!phys) return;
     this.bossSpawned = true;
 
-    const archetype: BossArchetype =
-      this.mapIndex === 1 ? 'loader' : this.mapIndex === 2 ? 'carrier' : 'guardian';
+    // Every level fields its own boss, cycling if the campaign loops.
+    const archetype: BossArchetype = LEVEL_BOSS[this.mapIndex % LEVEL_BOSS.length]!;
     const boss = new BossAgent(phys, archetype, new THREE.Vector3(center.x, 3.2, center.z));
     // Bosses scale hardest — they are the level's wall, so they should feel it first.
     boss.hp = Math.round(boss.hp * this.difficulty * 1.15);
@@ -890,10 +898,11 @@ export class Game {
       const dist = Math.hypot(dx, dz);
 
       if (dist > 1.1) {
-        e.applyMoveVelocity((dx / dist) * ENEMY_SPEED, (dz / dist) * ENEMY_SPEED, ENEMY_SPEED);
+        const sp = ENEMY_SPEED * this.enemySpeedScale;
+        e.applyMoveVelocity((dx / dist) * sp, (dz / dist) * sp, sp);
         e.setYaw(Math.atan2(dx, dz));
       } else {
-        e.applyMoveVelocity(0, 0, ENEMY_SPEED);
+        e.applyMoveVelocity(0, 0, ENEMY_SPEED * this.enemySpeedScale);
         if (!decoy && this.player.alive) this.damagePlayer(18 * delta);
       }
     }

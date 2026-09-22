@@ -16,11 +16,19 @@ export type BrickBuild = {
   shoulder: number;
 };
 
+export type BrickTrait =
+  | 'none' | 'plated' | 'shielded' | 'lanky' | 'brute'
+  | 'spiked' | 'scout' | 'quad' | 'crested' | 'beacon' | 'veteran'
+  /** Boss-only extras. */
+  | 'boss';
+
 export type BrickFigureOpts = {
   boss?: boolean;
   shield?: boolean;
   /** Proportions. Chassis rebuilds change the silhouette, not just the palette. */
   build?: BrickBuild;
+  /** One distinguishing appendage, so ten enemies do not read as one recoloured grunt. */
+  trait?: BrickTrait;
 };
 
 /**
@@ -187,6 +195,70 @@ export function createBrickFigure(palette: BrickPalette, opts: BrickFigureOpts =
     const boot = new THREE.Mesh(new THREE.BoxGeometry(0.26, 0.1, 0.32), plastic('#0a0e16', 0.5));
     boot.position.set(0, -0.58 * b.legL, 0.04);
     pivot.add(boot);
+  }
+
+  /*
+   * Traits. Each is a small appendage that changes the outline, which is what actually
+   * distinguishes enemies at third-person range — palette alone reads as one recoloured unit.
+   */
+  const trait = opts.trait ?? 'none';
+  const dark = plastic('#12161f', 0.5, 0.3);
+
+  if (trait === 'spiked' || trait === 'veteran') {
+    for (const side of [-1, 1]) {
+      for (let i = 0; i < 3; i++) {
+        const spike = new THREE.Mesh(new THREE.ConeGeometry(0.11, 0.42, 6), accentMat);
+        spike.position.set(side * (0.52 + i * 0.1) * b.shoulder, 1.28 * b.legL, -0.1 + i * 0.2);
+        spike.rotation.z = side * -0.7;
+        spike.castShadow = true;
+        body.add(spike);
+      }
+    }
+  }
+  if (trait === 'plated' || trait === 'veteran') {
+    // A front plate, matching the loader boss's directional armour read.
+    const plate = new THREE.Mesh(new THREE.BoxGeometry(0.62 * b.torsoW, 0.5, 0.14), accentMat);
+    plate.position.set(0, 1.14 * b.legL, 0.26);
+    plate.castShadow = true;
+    body.add(plate);
+  }
+  if (trait === 'quad') {
+    // Two extra lower arms.
+    for (const side of [-1, 1]) {
+      const extra = new THREE.Mesh(new THREE.BoxGeometry(0.16, 0.34 * b.armL, 0.16), torsoMat);
+      extra.position.set(side * 0.5 * b.shoulder, 0.92 * b.legL, 0.06);
+      extra.castShadow = true;
+      body.add(extra);
+    }
+  }
+  if (trait === 'crested') {
+    const crest = new THREE.Mesh(new THREE.ConeGeometry(0.16, 0.5, 5), accentMat);
+    crest.position.set(0, RIG.headY * b.legL + 0.42 * b.headScale, -0.06);
+    crest.rotation.x = -0.3;
+    crest.castShadow = true;
+    body.add(crest);
+  }
+  if (trait === 'beacon') {
+    const mast = new THREE.Mesh(new THREE.CylinderGeometry(0.035, 0.035, 0.85, 6), dark);
+    mast.position.set(0.22, 1.62 * b.legL, -0.22);
+    body.add(mast);
+    const bulb = new THREE.Mesh(new THREE.SphereGeometry(0.1, 8, 6), glow(palette.accent, 1.6));
+    bulb.position.set(0.22, 2.05 * b.legL, -0.22);
+    body.add(bulb);
+  }
+  if (trait === 'scout') {
+    const visor = new THREE.Mesh(new THREE.BoxGeometry(0.34 * b.headScale, 0.1, 0.06), glow(palette.accent, 1.5));
+    visor.position.set(0, RIG.headY * b.legL + 0.06, 0.18);
+    body.add(visor);
+  }
+  if (trait === 'lanky') {
+    // Antennae — reads as agile at a glance.
+    for (const side of [-1, 1]) {
+      const ant = new THREE.Mesh(new THREE.CylinderGeometry(0.025, 0.025, 0.5, 5), accentMat);
+      ant.position.set(side * 0.12, RIG.headY * b.legL + 0.5 * b.headScale, 0);
+      ant.rotation.z = side * 0.35;
+      body.add(ant);
+    }
   }
 
   if (opts.shield) {

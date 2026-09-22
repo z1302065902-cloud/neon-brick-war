@@ -1,0 +1,6 @@
+{
+  "$schema": "https://openapi.vercel.sh/vercel.json",
+  "buildCommand": "npx tsc && VITE_CAMPAIGN=free npx vite build",
+  "outputDirectory": "dist",
+  "framework": null
+}

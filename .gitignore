@@ -9,3 +9,4 @@ artifacts/
 .backup-20260919/
 dist-demo/
 dist-full/
+.vercel

@@ -235,7 +235,16 @@ export class Game {
 
     this.spawnWaveForOutpost(0);
     this.spawnPickupsForMap();
+    /*
+     * Pre-compile every shader this level will need, before the player sees it.
+     *
+     * Without this the first frame of each level compiles material programs on demand,
+     * which showed up on every device as a handful of ~50ms frames right at the transition.
+     * The scene is fully built by this point, so compiling now is exactly the work that
+     * would otherwise be paid mid-gameplay.
+     */
     this.vfx.warmUp(this.renderer, this.camera);
+    this.renderer.compile(this.scene, this.camera);
     this.audio.startMusic(map);
 
     this.ready = true;

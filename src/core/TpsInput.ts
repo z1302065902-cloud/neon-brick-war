@@ -22,9 +22,34 @@ export class TpsInput {
   private volumeDir: 1 | -1 | 0 = 0;
   private jumpPressed = false;
   private fusePressed = false;
+  /**
+   * Text capture mode for the Afdian redeem field.
+   *
+   * While this is on the game must not react to keys at all — otherwise typing an order
+   * number walks the player around and fires their gun. Everything typed accumulates here,
+   * and the submit/cancel signals are consumed by the caller.
+   */
+  private textMode = false;
+  private textBuffer = '';
+  private textSubmit = false;
+  private textCancel = false;
   private chassisPressed = false;
 
   private readonly onKeyDown = (e: KeyboardEvent) => {
+    if (this.textMode) {
+      e.preventDefault();
+      // keydown repeats while held; only the first counts for editing keys.
+      const firstPress = !this.keys.has(e.code);
+      this.keys.add(e.code);
+      if (e.key === 'Enter') this.textSubmit = true;
+      else if (e.key === 'Escape') this.textCancel = true;
+      else if (e.key === 'Backspace') {
+        if (firstPress || this.textBuffer.length === 0) this.textBuffer = this.textBuffer.slice(0, -1);
+      } else if (e.key.length === 1 && this.textBuffer.length < 64) {
+        this.textBuffer += e.key;
+      }
+      return;
+    }
     // keydown auto-repeats while a key is held, so only the first event counts as a press.
     const firstPress = !this.keys.has(e.code);
     this.keys.add(e.code);
@@ -164,6 +189,46 @@ export class TpsInput {
   consumeRestart(): boolean {
     const v = this.restartPressed;
     this.restartPressed = false;
+    return v;
+  }
+
+  /** Begin capturing raw keystrokes for a text field. */
+  beginText(): void {
+    this.textMode = true;
+    this.textBuffer = '';
+    this.textSubmit = false;
+    this.textCancel = false;
+    // Drop held movement keys so the player does not walk while typing.
+    this.keys.clear();
+    this.fireHeld = false;
+    this.fireQueued = false;
+  }
+
+  endText(): void {
+    this.textMode = false;
+    this.textBuffer = '';
+    this.textSubmit = false;
+    this.textCancel = false;
+    this.keys.clear();
+  }
+
+  get isCapturingText(): boolean {
+    return this.textMode;
+  }
+
+  get text(): string {
+    return this.textBuffer;
+  }
+
+  consumeTextSubmit(): boolean {
+    const v = this.textSubmit;
+    this.textSubmit = false;
+    return v;
+  }
+
+  consumeTextCancel(): boolean {
+    const v = this.textCancel;
+    this.textCancel = false;
     return v;
   }
 

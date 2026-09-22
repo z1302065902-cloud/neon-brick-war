@@ -10,3 +10,5 @@ artifacts/
 dist-demo/
 dist-full/
 .vercel
+release/
+*.zip

@@ -112,6 +112,13 @@ export class CanvasHud {
     this.volumeUntil = performance.now() + 1600;
   }
   private volumeUntil = 0;
+  /** Afdian redeem panel state; null when the panel is closed. */
+  private redeem: { text: string; message: string; busy: boolean } | null = null;
+
+  /** Open the order-entry panel. `message` is a status line (error or instruction). */
+  setRedeem(state: { text: string; message: string; busy: boolean } | null): void {
+    this.redeem = state;
+  }
 
   /** Story card during level transitions; alpha 0..1 drives the fade. */
   setStory(lines: string[], alpha: number): void {
@@ -296,7 +303,8 @@ export class CanvasHud {
       this.drawStatus(L);
     }
     this.drawCrosshair();
-    if (this.paused) this.drawPaused(L);
+    if (this.redeem) this.drawRedeem(L);
+    else if (this.paused) this.drawPaused(L);
     if (this.volume !== null && performance.now() < this.volumeUntil) this.drawVolume(L);
     if (this.hint) this.drawHint(L);
     // A story card and a banner say the same kind of thing and share a band, so the
@@ -662,6 +670,68 @@ export class CanvasHud {
     c.fillText(sub, L.w / 2, y + px + 38);
     c.textAlign = 'left';
     this.statusRect = null;
+  }
+
+  /**
+   * Afdian order-redemption panel.
+   *
+   * Drawn in-canvas like everything else, and deliberately modal: while it is open the pause
+   * scrim stays up and the game does not accept gameplay input, because the player is typing
+   * an order number, not playing.
+   */
+  private drawRedeem(L: Layout): void {
+    const r = this.redeem!;
+    const c = this.ctx;
+    c.fillStyle = 'rgba(3,5,12,0.72)';
+    c.fillRect(0, 0, L.w, L.h);
+
+    const w = Math.min(560, L.w - L.margin * 2);
+    const h = 232;
+    const x = (L.w - w) / 2;
+    const y = Math.max(L.margin, (L.h - h) / 2);
+    this.plate(x, y, w, h, 16, 'rgba(199,125,255,0.55)');
+
+    const pad = Math.min(24, w * 0.06);
+    this.label(this.txt('Unlock the full campaign', '解锁完整战役'), x + pad, y + 30, AMBER, 13);
+    this.label(
+      this.txt('Enter your Afdian order number', '请输入爱发电订单号'),
+      x + pad, y + 52, DIM, 10,
+    );
+
+    // input field
+    const fx = x + pad;
+    const fy = y + 70;
+    const fw = w - pad * 2;
+    const fh = 46;
+    c.fillStyle = 'rgba(234,246,255,0.07)';
+    c.fillRect(fx, fy, fw, fh);
+    c.strokeStyle = r.busy ? 'rgba(255,183,3,0.8)' : EDGE;
+    c.lineWidth = 1.5;
+    c.strokeRect(fx, fy, fw, fh);
+
+    const shown = r.text || '';
+    c.font = fValue(18);
+    c.fillStyle = shown ? INK : 'rgba(234,246,255,0.3)';
+    c.textAlign = 'left';
+    c.fillText(shown || this.txt('order number…', '订单号…'), fx + 14, fy + 30);
+    // caret
+    if (!r.busy) {
+      const tw = shown ? c.measureText(shown).width : 0;
+      c.fillStyle = AMBER;
+      c.fillRect(fx + 15 + tw, fy + 13, 2, 21);
+    }
+
+    // status line
+    if (r.message) {
+      const isErr = /fail|invalid|wrong|错误|失败|无效|找不到/i.test(r.message);
+      this.label(r.message, fx, fy + fh + 22, isErr ? PINK : GREEN, 10);
+    }
+
+    this.label(
+      this.txt('ENTER confirm · ESC cancel · B opens Afdian', '回车确认 · ESC 取消 · B 打开爱发电'),
+      fx, y + h - 22, DIM, 9,
+    );
+    c.textAlign = 'left';
   }
 
   /** Transient volume bar, bottom-left. */

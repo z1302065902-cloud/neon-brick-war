@@ -23,6 +23,8 @@ export type HudState = {
   mapName: string;
   unlockedKeys: number[];
   currentKey: number;
+  /** Non-empty once the campaign is looping; shown next to the level name. */
+  cycleLabel: string;
 };
 
 type Rect = { x: number; y: number; w: number; h: number };
@@ -414,8 +416,15 @@ export class CanvasHud {
     const pad = Math.min(16, w * 0.06);
 
     this.label(this.txt('Objective', '目标'), x + pad, y + 20);
-    const namePx = this.fit(s.mapName, w - pad * 2, [17, 15, 13], fValue);
+    const cycleW = s.cycleLabel ? this.ctx.measureText(s.cycleLabel).width + 12 : 0;
+    const namePx = this.fit(s.mapName, w - pad * 2 - cycleW, [17, 15, 13], fValue);
     this.value(s.mapName, x + pad, y + 46, INK, namePx);
+    if (s.cycleLabel) {
+      // The loop number sits after the name in a hot colour so it reads as a rank, not a label.
+      this.ctx.font = fValue(namePx);
+      const nameW = this.ctx.measureText(s.mapName).width;
+      this.label(s.cycleLabel, x + pad + nameW + 8, y + 46, AMBER, 10);
+    }
 
     const hostilesW = s.enemiesLeft > 0 ? 52 : 0;
     const objPx = this.fit(s.objective, w - pad * 2 - hostilesW, [10, 9, 8], fLabel);

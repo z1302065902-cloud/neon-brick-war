@@ -114,6 +114,11 @@ export class Game {
   private chassis: ChassisId = DEFAULT_CHASSIS;
   private baseSpeed = BASE_SPEED;
   private baseJump = JUMP_SPEED;
+  /**
+   * Completed campaign loops. Each one replays all ten levels with everything scaled up, so
+   * the game never runs out of content — the campaign is a ramp, not a wall.
+   */
+  private cycle = 0;
 
   constructor(private readonly canvas: HTMLCanvasElement) {
     this.renderer = createRenderer(canvas);
@@ -312,6 +317,22 @@ export class Game {
     }
   }
 
+  /**
+   * Difficulty multiplier for the current loop.
+   *
+   * Deliberately compounding but gentle — +30% per cycle on health, and enemy *count* grows
+   * by one per loop rather than a percentage, because a wall of bullet-sponges stops being
+   * fun long before a slightly bigger crowd does.
+   */
+  private get difficulty(): number {
+    return 1 + this.cycle * 0.3;
+  }
+
+  /** Extra bodies per wave. Capped so the arena does not turn into a mosh pit. */
+  private get extraEnemies(): number {
+    return Math.min(5, this.cycle);
+  }
+
   private createLevel(map: number): LevelBuildResult {
     const phys = this.physics;
     if (!phys) throw new Error('Physics not ready');
@@ -355,7 +376,7 @@ export class Game {
 
     // Level index is zero-based, so the old `+ (mapIndex - 1)` scaling made level 1 spawn
     // one enemy short of the intended three.
-    const count = 3 + index + Math.floor(this.mapIndex / 2);
+    const count = 3 + index + Math.floor(this.mapIndex / 2) + this.extraEnemies;
     for (let i = 0; i < count; i++) {
       const ang = (i / count) * Math.PI * 2;
       const pos = new THREE.Vector3(
@@ -365,7 +386,8 @@ export class Game {
       );
       const shield = i % 3 === 2;
       this.addEnemy(
-        new BrickAgent(phys, ENEMY_PALETTE, pos, 'enemy', shield ? 70 : 55, {
+        new BrickAgent(phys, ENEMY_PALETTE, pos, 'enemy',
+          Math.round((shield ? 70 : 55) * this.difficulty), {
           shieldTrooper: shield,
         }),
       );
@@ -377,7 +399,9 @@ export class Game {
      * Count climbs with the level and they only appear from the second wave onward, which
      * keeps the opening of a level about the ground push.
      */
-    const flyers = index === 0 ? 0 : Math.min(3, Math.floor(this.mapIndex / 3) + 1);
+    const flyers = index === 0
+      ? 0
+      : Math.min(5, Math.floor(this.mapIndex / 3) + 1 + Math.floor(this.cycle / 2));
     for (let i = 0; i < flyers; i++) {
       const ang = (i / Math.max(1, flyers)) * Math.PI * 2 + 0.7;
       this.addEnemy(
@@ -417,6 +441,8 @@ export class Game {
     const archetype: BossArchetype =
       this.mapIndex === 1 ? 'loader' : this.mapIndex === 2 ? 'carrier' : 'guardian';
     const boss = new BossAgent(phys, archetype, new THREE.Vector3(center.x, 3.2, center.z));
+    // Bosses scale hardest — they are the level's wall, so they should feel it first.
+    boss.hp = Math.round(boss.hp * this.difficulty * 1.15);
     this.boss = boss;
     this.enemies.push(boss);
     this.scene.add(boss.group);
@@ -428,7 +454,7 @@ export class Game {
         1.0,
         center.z + Math.sin(ang) * 4,
       );
-      this.addEnemy(new BrickAgent(phys, ENEMY_PALETTE, pos, 'enemy', 50));
+      this.addEnemy(new BrickAgent(phys, ENEMY_PALETTE, pos, 'enemy', Math.round(50 * this.difficulty)));
     }
 
     // Unlock a mid-tier gun when boss appears
@@ -966,11 +992,46 @@ export class Game {
         ),
       );
     } else {
-      this.mapAdvanceTimer = 0;
+      /*
+       * Campaign cleared — loop instead of stopping.
+       *
+       * The story reframes rather than repeats: the city reassembles and you go again, which
+       * is exactly what the fiction has been saying the whole time. Gameplay-wise this is a
+       * New Game+ ramp, so the ten levels are a pattern to master rather than a one-off.
+       */
+      this.cycle += 1;
+      this.mapAdvanceTimer = 3.6;
       this.storyLines = [...CAMPAIGN_END];
-      this.storyTimer = 8;
-      this.hud.setUnlockVisible(true, tr(CAMPAIGN_END[CAMPAIGN_END.length - 1]!, this.lang));
+      this.storyTimer = 3.6;
+      this.hud.setUnlockVisible(
+        true,
+        this.lang === 'zh'
+          ? `第 ${this.cycle + 1} 轮\n城市已重新拼合\n敌人强度 +${this.cycle * 30}%`
+          : `CYCLE ${this.cycle + 1}\nTHE CITY REBUILDS ITSELF\nENEMIES +${this.cycle * 30}%`,
+      );
     }
+  }
+
+  /** Restart the campaign from level 1 at the current cycle's difficulty. */
+  private beginNextCycle(): void {
+    this.advancing = true;
+    this.mapAdvanceTimer = 0;
+    this.win = false;
+    this.ready = false;
+    this.hud.setUnlockVisible(
+      true,
+      this.lang === 'zh' ? `正在重建城市… 第 ${this.cycle + 1} 轮` : `REBUILDING… CYCLE ${this.cycle + 1}`,
+    );
+    void this.boot(0)
+      .then(() => {
+        this.advancing = false;
+        this.hud.setUnlockVisible(false);
+      })
+      .catch((err) => {
+        console.error('Failed to start the next cycle', err);
+        this.advancing = false;
+        this.ready = true;
+      });
   }
 
   /** Advances the story-card timer and publishes the current lines to the HUD. */
@@ -1141,8 +1202,12 @@ export class Game {
     if (this.advancing) return;
     // Allow advance when cleared (win) — map 1→2 and 2→3.
     if (!this.win) return;
+    // Past the last level, the loop restarts from the first with the new difficulty.
+    if (this.mapIndex + 1 >= TOTAL_LEVELS) {
+      this.beginNextCycle();
+      return;
+    }
     const next = this.mapIndex + 1;
-    if (next >= TOTAL_LEVELS) return;
     if (!this.unlocks.canPlayMap(next)) return;
 
     this.advancing = true;
@@ -1277,6 +1342,9 @@ export class Game {
       status,
       enemiesLeft: this.enemies.filter((e) => e.alive).length,
       mapName: this.level.name,
+      cycleLabel: this.cycle > 0
+        ? (this.lang === 'zh' ? `第 ${this.cycle + 1} 轮` : `CYCLE ${this.cycle + 1}`)
+        : '',
       unlockedKeys: this.loadout.unlockedKeys,
       currentKey: w.keyIndex,
     });
@@ -1286,7 +1354,8 @@ export class Game {
     if (this.win) {
       // Level already cleared: never respawn a wave here, that cancels the advance.
       const next = this.mapIndex + 1;
-      if (next >= TOTAL_LEVELS || !this.unlocks.canPlayMap(next)) void this.boot(0);
+      if (next >= TOTAL_LEVELS) this.beginNextCycle();
+      else if (!this.unlocks.canPlayMap(next)) void this.boot(0);
       else this.tryAdvanceMap();
       return;
     }
